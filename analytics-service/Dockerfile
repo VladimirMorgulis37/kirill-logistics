@@ -3,10 +3,10 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o tracking-service
+RUN go build -o order-service
 
 FROM alpine:latest
 WORKDIR /root/
-COPY --from=builder /app/tracking-service .
+COPY --from=builder /app/order-service .
 EXPOSE 8080
-ENTRYPOINT ["./tracking-service"]
+ENTRYPOINT ["./analytics-service"]
