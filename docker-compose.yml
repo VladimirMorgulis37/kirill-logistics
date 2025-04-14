@@ -19,7 +19,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-      
+
   # База данных для Order Service
   order-db:
     image: postgres:13
@@ -51,6 +51,7 @@ services:
       - "5435:5432"
     volumes:
       - tracking_db_data:/var/lib/postgresql/data
+      - ./tracking-service/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U analytics_user"]
       interval: 5s
