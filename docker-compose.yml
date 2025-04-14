@@ -1,0 +1,143 @@
+version: '3.8'
+
+services:
+  # База данных для Auth Service
+  auth-db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_USER: auth_user
+      POSTGRES_PASSWORD: auth_password
+      POSTGRES_DB: auth_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - auth_db_data:/var/lib/postgresql/data
+      - ./auth-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      
+  # База данных для Order Service
+  order-db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_USER: order_user
+      POSTGRES_PASSWORD: order_password
+      POSTGRES_DB: order_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - order_db_data:/var/lib/postgresql/data
+      - ./order-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # База данных для Tracking Service
+  tracking-db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_USER: tracking_user
+      POSTGRES_PASSWORD: tracking_password
+      POSTGRES_DB: tracking_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - tracking_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # База данных для Analytics Service
+  analytics-db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_USER: analytics_user
+      POSTGRES_PASSWORD: analytics_password
+      POSTGRES_DB: analytics_db
+    ports:
+      - "5436:5432"
+    volumes:
+      - analytics_db_data:/var/lib/postgresql/data
+      - ./analytics-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "8081:8080"
+    depends_on:
+      - auth-db
+    environment:
+      - DB_HOST=auth-db
+      - DB_USER=auth_user
+      - DB_PASSWORD=auth_password
+      - DB_NAME=auth_db
+
+  order-service:
+    build: ./order-service
+    ports:
+      - "8082:8080"
+    depends_on:
+      - order-db
+    environment:
+      - DB_HOST=order-db
+      - DB_USER=order_user
+      - DB_PASSWORD=order_password
+      - DB_NAME=order_db
+
+  tracking-service:
+    build: ./tracking-service
+    ports:
+      - "8083:8080"
+    depends_on:
+      - tracking-db
+    environment:
+      - DB_HOST=tracking-db
+      - DB_USER=tracking_user
+      - DB_PASSWORD=tracking_password
+      - DB_NAME=tracking_db
+
+  analytics-service:
+    build: ./analytics-service
+    ports:
+      - "8084:8080"
+    depends_on:
+      - analytics-db
+    environment:
+      - DB_HOST=analytics-db
+      - DB_USER=analytics_user
+      - DB_PASSWORD=analytics_password
+      - DB_NAME=analytics_db
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8081
+    depends_on:
+      - auth-service
+      - order-service
+      - tracking-service
+      - analytics-service
+
+volumes:
+  auth_db_data:
+  order_db_data:
+  tracking_db_data:
+  analytics_db_data:
