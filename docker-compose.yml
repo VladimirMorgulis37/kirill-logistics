@@ -15,7 +15,7 @@ services:
       - auth_db_data:/var/lib/postgresql/data
       - ./auth-service/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      test: ["CMD-SHELL", "pg_isready -U auth_user -d auth_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -34,7 +34,7 @@ services:
       - order_db_data:/var/lib/postgresql/data
       - ./order-service/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      test: ["CMD-SHELL", "pg_isready -U order_user -d order_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -53,7 +53,7 @@ services:
       - tracking_db_data:/var/lib/postgresql/data
       - ./tracking-service/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      test: ["CMD-SHELL", "pg_isready -U tracking_user -d tracking_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -72,7 +72,7 @@ services:
       - analytics_db_data:/var/lib/postgresql/data
       - ./analytics-service/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U analytics_user"]
+      test: ["CMD-SHELL", "pg_isready -U analytics_user -d analytics_db"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -128,9 +128,12 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "3000:3000"
+      - "3000:80"  # если используется Nginx, внутри контейнера порт 80
     environment:
-      - REACT_APP_API_URL=http://localhost:8081
+      - REACT_APP_AUTH_URL=http://localhost:8081
+      - REACT_APP_ORDERS_URL=http://localhost:8082
+      - REACT_APP_TRACKING_URL=http://localhost:8083
+      - REACT_APP_ANALYTICS_URL=http://localhost:8084
     depends_on:
       - auth-service
       - order-service
