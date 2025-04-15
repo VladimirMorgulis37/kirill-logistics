@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,10 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/streadway/amqp"
 	_ "github.com/lib/pq"
 )
 
-// Order представляет структуру заказа для логистической системы.
+// Order описывает заказ.
 type Order struct {
 	ID            string    `json:"id"`
 	SenderName    string    `json:"sender_name"`
@@ -23,17 +25,15 @@ type Order struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// Глобальная переменная для подключения к базе данных.
 var db *sql.DB
 
-// initDB устанавливает соединение с базой данных order-db.
-// Переменные окружения: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
+// Рекомендуется создать отдельную функцию для подключения к БД.
 func initDB() (*sql.DB, error) {
 	host := os.Getenv("DB_HOST")
 	user := os.Getenv("DB_USER")
 	password := os.Getenv("DB_PASSWORD")
 	dbname := os.Getenv("DB_NAME")
-	port := "5432" // PostgreSQL внутри контейнера всегда слушает на 5432.
+	port := "5432"
 
 	psqlInfo := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		host, port, user, password, dbname)
@@ -41,12 +41,63 @@ func initDB() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if err = database.Ping(); err != nil {
 		return nil, err
 	}
-
 	return database, nil
+}
+
+// publishOrderCompletedEvent публикует событие завершённого заказа в RabbitMQ.
+func publishOrderCompletedEvent(orderID string) error {
+	rabbitURL := os.Getenv("RABBITMQ_URL") // Например: "amqp://user:password@rabbitmq:5672/"
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		return fmt.Errorf("dial: %s", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("channel: %s", err)
+	}
+	defer ch.Close()
+
+	q, err := ch.QueueDeclare(
+		"order_completed", // имя очереди
+		true,              // durable
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("queue declare: %s", err)
+	}
+
+	// Формируем сообщение с событием завершения заказа.
+	event := map[string]string{
+		"order_id": orderID,
+		"event":    "order_completed",
+		"message":  "Заказ успешно завершён и доставлен",
+	}
+	body, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("json marshal: %s", err)
+	}
+
+	err = ch.Publish(
+		"",     // exchange
+		q.Name, // routing key
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		})
+	if err != nil {
+		return fmt.Errorf("publish: %s", err)
+	}
+	return nil
 }
 
 func main() {
@@ -56,7 +107,6 @@ func main() {
 		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
 
-	// Инициализируем маршруты с использованием Gin.
 	r := gin.Default()
 
 	// Health-check endpoint.
@@ -64,20 +114,18 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// Создание заказа: POST /orders.
+	// Endpoint для создания заказа.
 	r.POST("/orders", func(c *gin.Context) {
 		var o Order
 		if err := c.BindJSON(&o); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
 			return
 		}
-		// Генерируем ID на основе времени (можно использовать UUID для production).
 		o.ID = time.Now().Format("20060102150405")
 		o.CreatedAt = time.Now()
-		o.Status = "новый" // начальный статус заказа.
-
+		o.Status = "новый"
 		query := `INSERT INTO orders (id, sender_name, recipient_name, address_from, address_to, status, created_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		          VALUES ($1, $2, $3, $4, $5, $6, $7)`
 		_, err := db.Exec(query, o.ID, o.SenderName, o.RecipientName, o.AddressFrom, o.AddressTo, o.Status, o.CreatedAt)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -86,78 +134,28 @@ func main() {
 		c.JSON(http.StatusCreated, o)
 	})
 
-	// Получение заказа по ID: GET /orders/:id.
-	r.GET("/orders/:id", func(c *gin.Context) {
-		id := c.Param("id")
-		var o Order
-		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at FROM orders WHERE id = $1"
-		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, o)
-	})
+	// Endpoint для завершения заказа: Курьер нажимает "Завершить заказ".
+	r.PUT("/orders/:id/finish", func(c *gin.Context) {
+		orderID := c.Param("id")
 
-	// Получение списка заказов: GET /orders.
-	r.GET("/orders", func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at FROM orders")
+		// Обновляем статус заказа на "завершённый".
+		query := "UPDATE orders SET status = $1 WHERE id = $2"
+		_, err := db.Exec(query, "завершён", orderID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		defer rows.Close()
 
-		orders := []Order{}
-		for rows.Next() {
-			var o Order
-			if err := rows.Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-				return
-			}
-			orders = append(orders, o)
+		// Публикуем событие в RabbitMQ, чтобы уведомить Notification Service.
+		if err := publishOrderCompletedEvent(orderID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отправки уведомления: " + err.Error()})
+			return
 		}
-		c.JSON(http.StatusOK, orders)
+
+		c.JSON(http.StatusOK, gin.H{"status": "Заказ завершён и уведомление отправлено"})
 	})
 
-	// Обновление заказа: PUT /orders/:id.
-	r.PUT("/orders/:id", func(c *gin.Context) {
-		id := c.Param("id")
-		var o Order
-		if err := c.BindJSON(&o); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
-			return
-		}
-		query := `UPDATE orders SET sender_name = $1, recipient_name = $2, address_from = $3, address_to = $4, status = $5, created_at = $6 WHERE id = $7`
-		_, err := db.Exec(query, o.SenderName, o.RecipientName, o.AddressFrom, o.AddressTo, o.Status, o.CreatedAt, id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		o.ID = id
-		c.JSON(http.StatusOK, o)
-	})
+	// (Дополнительно можно добавить GET /orders/:id и другие CRUD-эндпоинты)
 
-	// Удаление заказа: DELETE /orders/:id.
-	r.DELETE("/orders/:id", func(c *gin.Context) {
-		id := c.Param("id")
-		result, err := db.Exec("DELETE FROM orders WHERE id = $1", id)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		rowsAffected, err := result.RowsAffected()
-		if err != nil || rowsAffected == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "Заказ удалён"})
-	})
-
-	// Запускаем сервис на порту 8080.
 	r.Run(":8080")
 }

@@ -1,6 +1,31 @@
 version: '3.8'
 
 services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+  notification-db:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_USER: notification_user
+      POSTGRES_PASSWORD: notification_pass
+      POSTGRES_DB: notification_db
+    ports:
+      - "5437:5432"
+    volumes:
+      - notification_db_data:/var/lib/postgresql/data
+      - ./notification-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification_user -d notification_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
   # База данных для Auth Service
   auth-db:
     image: postgres:13
@@ -100,6 +125,7 @@ services:
       - DB_USER=order_user
       - DB_PASSWORD=order_password
       - DB_NAME=order_db
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
 
   tracking-service:
     build: ./tracking-service
@@ -125,6 +151,18 @@ services:
       - DB_PASSWORD=analytics_password
       - DB_NAME=analytics_db
 
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "8085:8080"
+    depends_on:
+      - notification-db
+    environment:
+      - DB_HOST=notification-db
+      - DB_USER=notification_user
+      - DB_PASSWORD=notification_pass
+      - DB_NAME=notification_db
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
   frontend:
     build: ./frontend
     ports:
@@ -140,8 +178,18 @@ services:
       - tracking-service
       - analytics-service
 
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    restart: always
+    
 volumes:
   auth_db_data:
   order_db_data:
   tracking_db_data:
   analytics_db_data:
+  notification_db_data:

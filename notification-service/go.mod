@@ -1,4 +1,4 @@
-module github.com/vladimirmorgulis37/kirill-logistics/order-service
+module github.com/yourusername/kirill-logistics/notification-service
 
 go 1.24.1
 
