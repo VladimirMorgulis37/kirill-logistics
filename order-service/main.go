@@ -9,12 +9,13 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/streadway/amqp"
 	_ "github.com/lib/pq"
+	"github.com/streadway/amqp"
 )
 
-// Order описывает заказ.
+// Order описывает заказ с расширенными полями для физический характеристик.
 type Order struct {
 	ID            string    `json:"id"`
 	SenderName    string    `json:"sender_name"`
@@ -23,6 +24,13 @@ type Order struct {
 	AddressTo     string    `json:"address_to"`
 	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
+
+	// Новые поля для расчёта доставки
+	Weight  float64 `json:"weight"`   // вес посылки (кг)
+	Length  float64 `json:"length"`   // длина (метры)
+	Width   float64 `json:"width"`    // ширина (метры)
+	Height  float64 `json:"height"`   // высота (метры)
+	Urgency int     `json:"urgency"`  // 1 - стандартная, 2 - экспресс
 }
 
 var db *sql.DB
@@ -108,7 +116,15 @@ func main() {
 	}
 
 	r := gin.Default()
-
+	corsConfig := cors.Config{
+        AllowOrigins:     []string{"http://localhost:3000"},
+        AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+        AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+        ExposeHeaders:    []string{"Content-Length"},
+        AllowCredentials: true,
+        MaxAge:           12 * time.Hour,
+    }
+    r.Use(cors.New(corsConfig))
 	// Health-check endpoint.
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -124,9 +140,26 @@ func main() {
 		o.ID = time.Now().Format("20060102150405")
 		o.CreatedAt = time.Now()
 		o.Status = "новый"
-		query := `INSERT INTO orders (id, sender_name, recipient_name, address_from, address_to, status, created_at)
-		          VALUES ($1, $2, $3, $4, $5, $6, $7)`
-		_, err := db.Exec(query, o.ID, o.SenderName, o.RecipientName, o.AddressFrom, o.AddressTo, o.Status, o.CreatedAt)
+		query := `
+			INSERT INTO orders
+				(id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency)
+			VALUES
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		`
+		_, err := db.Exec(query,
+			o.ID,
+			o.SenderName,
+			o.RecipientName,
+			o.AddressFrom,
+			o.AddressTo,
+			o.Status,
+			o.CreatedAt,
+			o.Weight,
+			o.Length,
+			o.Width,
+			o.Height,
+			o.Urgency,
+		)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -134,6 +167,41 @@ func main() {
 		c.JSON(http.StatusCreated, o)
 	})
 
+	r.GET("/orders", func(c *gin.Context) {
+		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency FROM orders")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		var orders []Order
+		for rows.Next() {
+			var o Order
+			if err := rows.Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			orders = append(orders, o)
+		}
+		c.JSON(http.StatusOK, orders)
+	})
+
+	r.GET("/orders/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		var o Order
+		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency FROM orders WHERE id = $1"
+		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, o)
+	})
+	
 	// Endpoint для завершения заказа: Курьер нажимает "Завершить заказ".
 	r.PUT("/orders/:id/finish", func(c *gin.Context) {
 		orderID := c.Param("id")

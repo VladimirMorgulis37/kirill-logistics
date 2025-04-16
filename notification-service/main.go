@@ -142,6 +142,17 @@ func processNotification(msg NotificationMessage) error {
 	return nil
 }
 
+func checkRabbitMQ() string {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		log.Printf("Не удалось подключиться к RabbitMQ: %v", err)
+		return "unavailable"
+	}
+	conn.Close()
+	return "ok"
+}
+
 func main() {
 	var err error
 	db, err = initDB()
@@ -154,8 +165,29 @@ func main() {
 
 	// Инициализируем HTTP API Notification Service.
 	r := gin.Default()
+	// Эндпоинт для проверки работоспособности (health-check)
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		// Проверка БД
+		dbStatus := "ok"
+		if err := db.Ping(); err != nil {
+			log.Printf("База данных недоступна: %v", err)
+			dbStatus = "unavailable"
+		}
+		// Проверка RabbitMQ
+		rabbitStatus := checkRabbitMQ()
+
+		// Если база данных недоступна, считаем сервис «degraded» (или unhealthy)
+		overallStatus := "ok"
+		if dbStatus != "ok" {
+			overallStatus = "degraded"
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"status":    overallStatus,
+			"db":        dbStatus,
+			"rabbitmq":  rabbitStatus,
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
 	})
 
 	// Эндпоинт для получения списка уведомлений
