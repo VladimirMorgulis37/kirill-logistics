@@ -12,3 +12,14 @@ CREATE TABLE IF NOT EXISTS orders (
     height DOUBLE PRECISION,
     urgency INT
 );
+
+-- 1. Создание таблицы курьеров
+CREATE TABLE IF NOT EXISTS couriers (
+  id VARCHAR(50) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL
+);
+
+-- 2. Добавление ссылки на курьера в таблицу заказов
+ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS courier_id VARCHAR(50)
+    REFERENCES couriers(id);

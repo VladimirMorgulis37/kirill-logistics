@@ -203,10 +203,10 @@ services:
     ports:
       - "3000:80"  # если используется Nginx, внутри контейнера порт 80
     environment:
-      - REACT_APP_AUTH_URL=http://localhost:8081
-      - REACT_APP_ORDERS_URL=http://localhost:8082
-      - REACT_APP_TRACKING_URL=http://localhost:8083
-      - REACT_APP_ANALYTICS_URL=http://localhost:8084
+      - REACT_APP_AUTH_URL=http://auth-service:8080
+      - REACT_APP_ORDERS_URL=http://order-service:8080
+      - REACT_APP_TRACKING_URL=http://tracking-service:8080
+      - REACT_APP_ANALYTICS_URL=http://analytics-service:8080
     depends_on:
       - auth-service
       - order-service

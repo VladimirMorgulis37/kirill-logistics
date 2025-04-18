@@ -1,5 +1,5 @@
 # Этап сборки приложения
-FROM node:16 AS builder
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 

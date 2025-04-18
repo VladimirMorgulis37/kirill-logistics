@@ -15,6 +15,11 @@ import (
 	"github.com/streadway/amqp"
 )
 
+type Courier struct {
+    ID   string `json:"id"`
+    Name string `json:"name"`
+}
+
 // Order описывает заказ с расширенными полями для физический характеристик.
 type Order struct {
 	ID            string    `json:"id"`
@@ -54,7 +59,65 @@ func initDB() (*sql.DB, error) {
 	}
 	return database, nil
 }
+// Получение списка курьеров
+func getCouriersHandler(c *gin.Context) {
+    rows, err := db.Query("SELECT id, name FROM couriers")
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    defer rows.Close()
 
+    var list []Courier
+    for rows.Next() {
+        var cur Courier
+        if err := rows.Scan(&cur.ID, &cur.Name); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+            return
+        }
+        list = append(list, cur)
+    }
+    c.JSON(http.StatusOK, list)
+}
+
+// Создание нового курьера
+func createCourierHandler(c *gin.Context) {
+    var cur Courier
+    if err := c.BindJSON(&cur); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
+        return
+    }
+    cur.ID = time.Now().Format("20060102150405")
+    if _, err := db.Exec("INSERT INTO couriers (id, name) VALUES ($1, $2)", cur.ID, cur.Name); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusCreated, cur)
+}
+
+// Назначение курьера на заказ
+func assignCourierHandler(c *gin.Context) {
+    orderID := c.Param("id")
+	var body struct {
+        CourierID string `json:"courier_id"`
+    }
+    if err := c.BindJSON(&body); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
+        return
+    }
+    res, err := db.Exec(
+        "UPDATE orders SET courier_id = $1 WHERE id = $2", body.CourierID, orderID,
+    )
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    if rows, _ := res.RowsAffected(); rows == 0 {
+        c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
+        return
+    }
+    c.JSON(http.StatusOK, gin.H{"status": "Курьер назначен"})
+}
 // publishOrderCompletedEvent публикует событие завершённого заказа в RabbitMQ.
 func publishOrderCompletedEvent(orderID string) error {
 	rabbitURL := os.Getenv("RABBITMQ_URL") // Например: "amqp://user:password@rabbitmq:5672/"
@@ -201,7 +264,7 @@ func main() {
 		}
 		c.JSON(http.StatusOK, o)
 	})
-	
+
 	// Endpoint для завершения заказа: Курьер нажимает "Завершить заказ".
 	r.PUT("/orders/:id/finish", func(c *gin.Context) {
 		orderID := c.Param("id")
@@ -224,6 +287,33 @@ func main() {
 	})
 
 	// (Дополнительно можно добавить GET /orders/:id и другие CRUD-эндпоинты)
+	// Endpoint для удаления заказа
+	r.DELETE("/orders/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		result, err := db.Exec("DELETE FROM orders WHERE id = $1", id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if rowsAffected == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
+			return
+		}
+		// Успешно удалили — возвращаем 204 No Content
+		c.Status(http.StatusNoContent)
+	})
+
+	    // 2. Эндпоинты для работы с курьерами
+		r.GET("/couriers", getCouriersHandler)
+		r.POST("/couriers", createCourierHandler)
+
+		// 3. Привязка курьера к заказу
+		r.PUT("/orders/:id/assign-courier", assignCourierHandler)
 
 	r.Run(":8080")
 }
