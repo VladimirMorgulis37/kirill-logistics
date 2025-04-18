@@ -107,7 +107,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: delivery_user
-      POSTGRES_PASSWORD: delivery_pass
+      POSTGRES_PASSWORD: delivery_password
       POSTGRES_DB: delivery_db
     ports:
       - "5438:5432"
@@ -190,7 +190,7 @@ services:
     environment:
       - DB_HOST=notification-db
       - DB_USER=notification_user
-      - DB_PASSWORD=notification_pass
+      - DB_PASSWORD=notification_password
       - DB_NAME=notification_db
       - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
     healthcheck:
