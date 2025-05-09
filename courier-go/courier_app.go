@@ -54,7 +54,7 @@ type TrackingInfo struct {
 
 func main() {
 	// 0) Настройки
-	orderID := "20250418205340"          // замените на ваш реальный orderID
+	orderID := "20250418221121"          // замените на ваш реальный orderID
 	trackingURL := "http://localhost:8083/tracking"
 	courierID := "courier_123"
 

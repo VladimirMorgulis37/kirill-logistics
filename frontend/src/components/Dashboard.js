@@ -68,7 +68,7 @@ export default function Dashboard({ token, onLogout }) {
       })
       .catch(console.error);
   };
-  // 3) Функция назначения курьера на заказ
+  // Функция назначения курьера на заказ
   const handleAssignCourier = (orderId, courierId) => {
     fetch(`${API_URLS.orders}/orders/${orderId}/assign-courier`, {
       method: 'PUT',
