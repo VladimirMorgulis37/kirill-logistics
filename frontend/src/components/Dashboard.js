@@ -3,12 +3,18 @@
 import React, { useState, useEffect } from "react";
 import API_URLS from "../config";
 import CourierMap from "./CourierMap";
+import { HashRouter as Router, Routes, Route, NavLink, Navigate } from "react-router-dom";
+import OrdersTable from "./OrdersTable";
 
 export default function Dashboard({ token, onLogout }) {
   const [orders, setOrders] = useState([]);
   const [couriers, setCouriers] = useState([]);
   const [sel, setSel] = useState("");
   const [newCourierName, setNewCourierName] = useState("");
+  const [newCourierPhone, setNewCourierPhone] = useState("");
+  const [newCourierVehicle, setNewCourierVehicle] = useState("foot");
+  const [newCourierLat, setNewCourierLat] = useState(55.7558);  // Москва по умолчанию
+  const [newCourierLng, setNewCourierLng] = useState(37.6176);
   const [newOrder, setNewOrder] = useState({
     senderName: "",
     recipientName: "",
@@ -20,102 +26,50 @@ export default function Dashboard({ token, onLogout }) {
     height: "",
     urgency: "1",
   });
-  useEffect(() => {
-    fetch(`${API_URLS.orders}/couriers`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(res => {
-        if (!res.ok) throw new Error('Не удалось загрузить курьеров');
-        return res.json();
-      })
-      .then(data => setCouriers(data))
-      .catch(console.error);
-  }, [token]);
-  useEffect(() => {
-    fetch(`${API_URLS.orders}/orders`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data) && data.length) {
-          setOrders(data);
-          setSel(data[0].id.toString());
-        } else {
-          setOrders([]); // сбрасываем список
-        }
-      })
-      .catch(console.error);
-  }, [token]);
-  const handleAddCourier = (e) => {
-    e.preventDefault();
-    fetch(`${API_URLS.orders}/couriers`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ name: newCourierName }),
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Не удалось добавить курьера");
-        return res.json();
-      })
-      .then((courier) => {
-        // Обновляем локальный список курьеров:
-        setCouriers((prev) => [...prev, courier]);
-        // Очищаем поле ввода:
-        setNewCourierName("");
-      })
-      .catch(console.error);
-  };
-  // Функция назначения курьера на заказ
-  const handleAssignCourier = (orderId, courierId) => {
-    fetch(`${API_URLS.orders}/orders/${orderId}/assign-courier`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ courier_id: courierId }),
-    })
-      .then(res => {
-        if (!res.ok) throw new Error('Ошибка при назначении курьера');
-        return res.json();
-      })
-      .then(() => {
-        // Обновляем локальный стейт: присваиваем courier_id нужному заказу
-        setOrders(prev =>
-          prev.map(o =>
-            o.id === orderId
-              ? { ...o, courier_id: courierId }
-              : o
-          )
-        );
-      })
-      .catch(console.error);
-  };
-  const handleDeleteOrder = (id) => {
-    fetch(`${API_URLS.orders}/orders/${id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => {
-        if (!r.ok) throw new Error("Ошибка при удалении заказа");
-        setOrders((prev) => prev.filter((o) => o.id !== id));
-        if (sel === id.toString()) {
-          const remaining = orders.filter((o) => o.id !== id);
-          setSel(remaining.length ? remaining[0].id.toString() : "");
-        }
-      })
-      .catch(console.error);
-  };
 
-  const handleInputChange = (e) => {
+  // Загрузка курьеров и заказов
+  useEffect(() => {
+    fetch(`${API_URLS.orders}/couriers`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(res => {
+        if (!res.ok) throw new Error("Не удалось загрузить курьеров");
+        return res.json();
+      })
+      .then(data => {
+        const list = Array.isArray(data) ? data : [];
+        setCouriers(list);
+      })
+      .catch(err => {
+        console.error(err);
+        setCouriers([]); // на всякий случай
+      });
+
+      fetch(`${API_URLS.orders}/orders`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(res => {
+          if (!res.ok) throw new Error("Не удалось загрузить заказы");
+          return res.json();
+        })
+        .then(data => {
+          const list = Array.isArray(data) ? data : [];
+          setOrders(list);
+          if (list.length) setSel(list[0].id);
+        })
+        .catch(err => {
+          console.error(err);
+          setOrders([]);
+        });
+  }, [token]);
+
+  // Обработчики
+  const handleInputChange = e => {
     const { name, value } = e.target;
-    setNewOrder((prev) => ({ ...prev, [name]: value }));
+    setNewOrder(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleAddOrder = (e) => {
+  const handleAddOrder = e => {
     e.preventDefault();
     const payload = {
       sender_name: newOrder.senderName,
@@ -133,217 +87,339 @@ export default function Dashboard({ token, onLogout }) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    })
+      .then(r => r.json())
+      .then(o => {
+        setOrders(prev => [...prev, o]);
+        setSel(o.id);
+        setNewOrder({ senderName: "", recipientName: "", addressFrom: "", addressTo: "", weight: "", length: "", width: "", height: "", urgency: "1" });
+      })
+      .catch(console.error);
+  };
+
+  const handleAddCourier = e => {
+    e.preventDefault();
+    fetch(`${API_URLS.orders}/couriers`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        name: newCourierName,
+        phone: newCourierPhone,
+        vehicle_type: newCourierVehicle,
+        latitude: parseFloat(newCourierLat),
+        longitude: parseFloat(newCourierLng),
+        status: "available",
+        active_order_id: ""
+      }),
     })
-      .then((r) => {
-        if (!r.ok) throw new Error("Ошибка при создании заказа");
-        return r.json();
+      .then(res => res.json())
+      .then(c => {
+        setCouriers(prev => [...prev, c]);
+        setNewCourierName("");
+        setNewCourierPhone("");
+        setNewCourierVehicle("foot");
+        setNewCourierLat(55.7558);
+        setNewCourierLng(37.6176);
       })
-      .then((data) => {
-        setOrders((prev) => [...prev, data]);
-        setSel(data.id);
-        setNewOrder({
-          senderName: "",
-          recipientName: "",
-          addressFrom: "",
-          addressTo: "",
-          weight: "",
-          length: "",
-          width: "",
-          height: "",
-          urgency: "1",
-        });
+      .catch(console.error);
+  };
+
+  const handleDeleteOrder = id => {
+    fetch(`${API_URLS.orders}/orders/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(r => {
+        if (!r.ok) throw new Error();
+        setOrders(prev => prev.filter(o => o.id !== id));
+        if (sel === id) setSel(orders[0]?.id || "");
+      })
+      .catch(console.error);
+  };
+
+  const handleAssignCourier = (orderId, courierId) => {
+    fetch(`${API_URLS.orders}/orders/${orderId}/assign-courier`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ courier_id: courierId })
+    })
+      .then(r => r.json())
+      .then(() => {
+        setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, courier_id: courierId } : o)));
       })
       .catch(console.error);
   };
 
   return (
-    <div>
-      <h3>Добавить заказ</h3>
-      <form onSubmit={handleAddOrder}>
-        <div>
-          <label>
-            Имя отправителя:
-            <input
-              type="text"
-              name="senderName"
-              value={newOrder.senderName}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Имя получателя:
-            <input
-              type="text"
-              name="recipientName"
-              value={newOrder.recipientName}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Адрес отправления:
-            <input
-              type="text"
-              name="addressFrom"
-              value={newOrder.addressFrom}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Адрес доставки:
-            <input
-              type="text"
-              name="addressTo"
-              value={newOrder.addressTo}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Вес (кг):
-            <input
-              type="number"
-              step="0.01"
-              name="weight"
-              value={newOrder.weight}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Длина (м):
-            <input
-              type="number"
-              step="0.01"
-              name="length"
-              value={newOrder.length}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Ширина (м):
-            <input
-              type="number"
-              step="0.01"
-              name="width"
-              value={newOrder.width}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Высота (м):
-            <input
-              type="number"
-              step="0.01"
-              name="height"
-              value={newOrder.height}
-              onChange={handleInputChange}
-              required
-            />
-          </label>
-        </div>
-        <div>
-          <label>
-            Срочность:
-            <select
-              name="urgency"
-              value={newOrder.urgency}
-              onChange={handleInputChange}
-            >
-              <option value="1">Стандартная</option>
-              <option value="2">Экспресс</option>
-            </select>
-          </label>
-        </div>
-        <button type="submit">Добавить</button>
-      </form>
-      <h3>Добавить курьера</h3>
-      <form onSubmit={handleAddCourier} style={{ marginBottom: "1rem" }}>
-        <input
-          type="text"
-          placeholder="Имя курьера"
-          value={newCourierName}
-          onChange={e => setNewCourierName(e.target.value)}
-          required
-        />
-        <button type="submit" style={{ marginLeft: "0.5rem" }}>
-          Добавить курьера
-        </button>
-      </form>
-      <h3>Список заказов</h3>
-      {Array.isArray(orders) && orders.length ? (
-        <ul>
-          {orders.map((order) => (
-            <li key={order.id} style={{ marginBottom: "1rem" }}>
-              {order.sender_name} → {order.recipient_name} (Статус: {order.status})
-              <button
-                style={{ marginLeft: "1rem" }}
-                onClick={() => handleDeleteOrder(order.id)}
-              >
-                Удалить
+    <Router>
+      <nav style={{ marginBottom: 16 }}>
+        <NavLink to="/add-order" style={{ marginRight: 8 }}>Добавить заказ</NavLink>
+        <NavLink to="/add-courier" style={{ marginRight: 8 }}>Добавить курьера</NavLink>
+        <NavLink to="/orders" style={{ marginRight: 8 }}>Список заказов</NavLink>
+        <NavLink to="/tracking" style={{ marginRight: 8 }}>Отслеживание</NavLink>
+        <button onClick={onLogout} style={{ float: "right" }}>Выйти</button>
+      </nav>
+      <Routes>
+        <Route path="/" element={<Navigate to="/add-order" replace />} />
+        <Route
+          path="/add-order"
+          element={
+            <form onSubmit={handleAddOrder}>
+              <h3>Добавить заказ</h3>
+              <div>
+                <label>
+                  Имя отправителя:
+                  <input
+                    type="text"
+                    name="senderName"
+                    value={newOrder.senderName}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Имя получателя:
+                  <input
+                    type="text"
+                    name="recipientName"
+                    value={newOrder.recipientName}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Адрес отправления:
+                  <input
+                    type="text"
+                    name="addressFrom"
+                    value={newOrder.addressFrom}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Адрес доставки:
+                  <input
+                    type="text"
+                    name="addressTo"
+                    value={newOrder.addressTo}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Вес (кг):
+                  <input
+                    type="number"
+                    name="weight"
+                    step="0.01"
+                    value={newOrder.weight}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Длина (м):
+                  <input
+                    type="number"
+                    name="length"
+                    step="0.01"
+                    value={newOrder.length}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Ширина (м):
+                  <input
+                    type="number"
+                    name="width"
+                    step="0.01"
+                    value={newOrder.width}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Высота (м):
+                  <input
+                    type="number"
+                    name="height"
+                    step="0.01"
+                    value={newOrder.height}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Срочность:
+                  <select
+                    name="urgency"
+                    value={newOrder.urgency}
+                    onChange={handleInputChange}
+                  >
+                    <option value="1">Стандартная</option>
+                    <option value="2">Экспресс</option>
+                  </select>
+                </label>
+              </div>
+              <button type="submit" style={{ marginTop: "1rem" }}>
+                Добавить
               </button>
-              <div style={{ marginTop: "0.5rem" }}>
-                <strong>Курьер:</strong>{" "}
-                {order.courier_id
-                  ? (couriers.find(c => c.id === order.courier_id)?.name || "Не найден")
-                  : "Не назначен"}
-                <select
-                  value={order.courier_id || ""}
-                  onChange={e => handleAssignCourier(order.id, e.target.value)}
-                  style={{ marginLeft: "0.5rem" }}
-                >
-                  <option value="">— выбрать курьера —</option>
-                  {couriers.map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
+            </form>
+          }
+        />
+        <Route
+          path="/add-courier"
+          element={
+            <form onSubmit={handleAddCourier}>
+              <h3>Добавить курьера</h3>
+              <div>
+                <label>
+                  Имя:
+                  <input
+                    type="text"
+                    placeholder="Имя курьера"
+                    value={newCourierName}
+                    onChange={e => setNewCourierName(e.target.value)}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Телефон:
+                  <input
+                    type="text"
+                    placeholder="+7..."
+                    value={newCourierPhone}
+                    onChange={e => setNewCourierPhone(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Тип транспорта:
+                  <select
+                    value={newCourierVehicle}
+                    onChange={e => setNewCourierVehicle(e.target.value)}
+                  >
+                    <option value="foot">Пеший</option>
+                    <option value="bike">Велосипед</option>
+                    <option value="car">Автомобиль</option>
+                  </select>
+                </label>
+              </div>
+              <div>
+                <label>
+                  Начальная широта:
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={newCourierLat}
+                    onChange={e => setNewCourierLat(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Начальная долгота:
+                  <input
+                    type="number"
+                    step="0.0001"
+                    value={newCourierLng}
+                    onChange={e => setNewCourierLng(e.target.value)}
+                  />
+                </label>
+              </div>
+              <button type="submit" style={{ marginTop: "1rem" }}>Добавить курьера</button>
+            </form>
+          }
+        />
+        <Route
+          path="/orders"
+          element={
+            <>
+              <h3>Список заказов</h3>
+              <ul>
+                {orders.map(o => (
+                  <li key={o.id} style={{ marginBottom: 8 }}>
+                    {o.sender_name} → {o.recipient_name} (Статус: {o.status})
+                    <button onClick={() => handleDeleteOrder(o.id)}>Удалить</button>
+                    <div>
+                      Курьер:{' '}
+                      {o.courier_id
+                        ? couriers.find(c => c.id === o.courier_id)?.name
+                        : 'Не назначен'}
+                      <select
+                        value={o.courier_id || ''}
+                        onChange={e => handleAssignCourier(o.id, e.target.value)}
+                      >
+                        <option value="">— выбрать —</option>
+                        {couriers.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <OrdersTable
+                orders={orders}couriers={couriers}
+                onDeleteOrder={handleDeleteOrder}
+                onAssignCourier={handleAssignCourier}
+                ></OrdersTable>
+              </>
+          }
+        />
+        <Route
+          path="/tracking"
+          element={
+            <>
+              <h3>Отслеживание</h3>
+              {orders.length ? (
+                <select value={sel} onChange={e => setSel(e.target.value)}>
+                  {orders.map(o => (
+                    <option key={o.id} value={o.id}>
+                      {o.sender_name} → {o.recipient_name}
                     </option>
                   ))}
                 </select>
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>Нет заказов</p>
-      )}
-
-      <h3>Выберите заказ для отслеживания</h3>
-      {orders.length ? (
-        <select value={sel} onChange={(e) => setSel(e.target.value)}>
-          {orders.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.sender_name} → {o.recipient_name} (#{o.id})
-            </option>
-          ))}
-        </select>
-      ) : (
-        <p>Нет заказов</p>
-      )}
-      {sel && <CourierMap orderId={sel} />}
-
-      <br />
-      <button onClick={onLogout}>Выйти</button>
-    </div>
+              ) : (
+                <p>Нет заказов</p>
+              )}
+              {sel && (
+                <CourierMap orderId={sel} token={token} />
+              )}
+            </>
+          }
+        />
+      </Routes>
+    </Router>
   );
 }

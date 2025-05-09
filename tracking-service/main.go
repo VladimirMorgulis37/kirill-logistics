@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
@@ -24,6 +25,14 @@ type TrackingInfo struct {
 	Longitude float64   `json:"longitude"`  // GPS-долгота
 	UpdatedAt time.Time `json:"updated_at"` // Время обновления
 }
+
+type CourierTracking struct {
+	CourierID string    `json:"courier_id"`
+	Status    string    `json:"status"`
+	Latitude  float64   `json:"latitude"`
+	Longitude float64   `json:"longitude"`
+	UpdatedAt time.Time `json:"updated_at"`
+  }
 
 var db *sql.DB
 
@@ -109,6 +118,15 @@ func main() {
 
 	// Инициализируем роутер Gin.
 	r := gin.Default()
+	corsConfig := cors.Config{
+        AllowOrigins:     []string{"http://localhost:3000"},
+        AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+        AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+        ExposeHeaders:    []string{"Content-Length"},
+        AllowCredentials: true,
+        MaxAge:           12 * time.Hour,
+    }
+    r.Use(cors.New(corsConfig))
 
 	// Health-check endpoint.
 	r.GET("/health", func(c *gin.Context) {
@@ -119,6 +137,29 @@ func main() {
 	r.GET("/tracking/ws", func(c *gin.Context) {
 		wsHandler(c.Writer, c.Request)
 	})
+
+    r.POST("/couriers/tracking", func(c *gin.Context) {
+        var ct CourierTracking
+        if err := c.BindJSON(&ct); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
+            return
+        }
+        ct.UpdatedAt = time.Now()
+        // Сохраняем или обновляем запись
+        _, err := db.Exec(`
+            INSERT INTO courier_tracking
+              (courier_id, status, latitude, longitude, updated_at)
+            VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT (courier_id) DO UPDATE SET
+              status     = EXCLUDED.status,
+              updated_at = EXCLUDED.updated_at
+        `, ct.CourierID, ct.Status, ct.Latitude, ct.Longitude, ct.UpdatedAt)
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+            return
+        }
+        c.JSON(http.StatusCreated, ct)
+    })
 
 	// POST /tracking – принимает обновления от курьера.
 	r.POST("/tracking", func(c *gin.Context) {

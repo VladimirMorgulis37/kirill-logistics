@@ -15,8 +15,14 @@ CREATE TABLE IF NOT EXISTS orders (
 
 -- 1. Создание таблицы курьеров
 CREATE TABLE IF NOT EXISTS couriers (
-  id VARCHAR(50) PRIMARY KEY,
-  name VARCHAR(255) NOT NULL
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT,
+  vehicle_type TEXT,
+  status TEXT DEFAULT 'available',
+  latitude DOUBLE PRECISION DEFAULT 0,
+  longitude DOUBLE PRECISION DEFAULT 0,
+  active_order_id TEXT
 );
 
 -- 2. Добавление ссылки на курьера в таблицу заказов

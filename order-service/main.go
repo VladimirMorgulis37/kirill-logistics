@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,8 +18,14 @@ import (
 )
 
 type Courier struct {
-    ID   string `json:"id"`
-    Name string `json:"name"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Phone        string  `json:"phone"`
+	VehicleType  string  `json:"vehicle_type"`  // "foot", "bike", "car"
+	Status       string  `json:"status"`        // "available", "busy", "offline"
+	Latitude     float64 `json:"latitude"`
+	Longitude    float64 `json:"longitude"`
+	ActiveOrder  string  `json:"active_order_id"` // может быть "" если не назначен
 }
 
 // Order описывает заказ с расширенными полями для физический характеристик.
@@ -88,36 +96,105 @@ func createCourierHandler(c *gin.Context) {
         return
     }
     cur.ID = time.Now().Format("20060102150405")
-    if _, err := db.Exec("INSERT INTO couriers (id, name) VALUES ($1, $2)", cur.ID, cur.Name); err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
+	_, err := db.Exec(`
+		INSERT INTO couriers (id, name, phone, vehicle_type, status, latitude, longitude, active_order_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, cur.ID, cur.Name, cur.Phone, cur.VehicleType, cur.Status, cur.Latitude, cur.Longitude, cur.ActiveOrder)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+    // 2) Отправляем POST в tracking-service на localhost
+	endpoint := "http://tracking-service:8080/couriers/tracking"
+    rec := map[string]interface{}{
+        "courier_id": cur.ID,
+        "status":     cur.Status,
+        "latitude":   cur.Latitude,
+        "longitude":  cur.Longitude,
     }
+    payload, _ := json.Marshal(rec)
+    resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
+    if err != nil {
+        log.Printf("createCourierHandler: POST to %s failed: %v", endpoint, err)
+    } else {
+        log.Printf("createCourierHandler: %s -> %s", endpoint, resp.Status)
+        resp.Body.Close()
+    }
+
     c.JSON(http.StatusCreated, cur)
 }
 
-// Назначение курьера на заказ
 func assignCourierHandler(c *gin.Context) {
     orderID := c.Param("id")
-	var body struct {
+    var body struct {
         CourierID string `json:"courier_id"`
     }
     if err := c.BindJSON(&body); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
+        log.Printf("assignCourierHandler: bind JSON error: %v", err)
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
+
+    // 1) Обновляем заказ
     res, err := db.Exec(
-        "UPDATE orders SET courier_id = $1 WHERE id = $2", body.CourierID, orderID,
+        "UPDATE orders SET courier_id = $1 WHERE id = $2",
+        body.CourierID, orderID,
     )
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        log.Printf("assignCourierHandler: DB update error: %v", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления заказа"})
         return
     }
-    if rows, _ := res.RowsAffected(); rows == 0 {
+    rows, _ := res.RowsAffected()
+    if rows == 0 {
         c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
         return
     }
+
+    // 2) Вызываем tracking-service
+    trackingURL := os.Getenv("TRACKING_URL")
+    if trackingURL == "" {
+        log.Println("assignCourierHandler: TRACKING_URL не задан")
+    } else {
+        rec := map[string]interface{}{
+            "order_id":   orderID,
+            "courier_id": body.CourierID,
+            "status":     "assigned",
+            // latitude/longitude можно опустить или передать актуальные,
+            // но в SQL-upsert они не перезапишут старые значения
+        }
+        payload, err := json.Marshal(rec)
+        if err != nil {
+            log.Printf("assignCourierHandler: marshaling error: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка формирования запроса трекинга"})
+            return
+        }
+
+        endpoint := fmt.Sprintf("%s/couriers/tracking", trackingURL)
+        log.Printf("assignCourierHandler: POST %s payload=%s", endpoint, string(payload))
+        resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
+        if err != nil {
+            log.Printf("assignCourierHandler: POST to tracking failed: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка вызова сервиса трекинга"})
+            return
+        }
+        defer resp.Body.Close()
+
+        if resp.StatusCode >= 300 {
+            bodyBytes, _ := io.ReadAll(resp.Body)
+            log.Printf("assignCourierHandler: tracking returned %d: %s", resp.StatusCode, string(bodyBytes))
+            c.JSON(http.StatusInternalServerError, gin.H{
+                "error": fmt.Sprintf("tracking-service: %s", string(bodyBytes)),
+            })
+            return
+        }
+
+        log.Printf("assignCourierHandler: tracking-service responded %s", resp.Status)
+    }
+
     c.JSON(http.StatusOK, gin.H{"status": "Курьер назначен"})
 }
+
 // publishOrderCompletedEvent публикует событие завершённого заказа в RabbitMQ.
 func publishOrderCompletedEvent(orderID string) error {
 	rabbitURL := os.Getenv("RABBITMQ_URL") // Например: "amqp://user:password@rabbitmq:5672/"

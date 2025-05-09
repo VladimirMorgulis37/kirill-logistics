@@ -156,6 +156,7 @@ services:
       - DB_PASSWORD=order_password
       - DB_NAME=order_db
       - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
+      - TRACKING_URL=http://tracking-service:8080
 
   tracking-service:
     build: ./tracking-service
@@ -199,14 +200,21 @@ services:
       timeout: 5s
       retries: 3
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: dev.Dockerfile
+    command: ["npm", "start"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
     ports:
-      - "3000:80"  # если используется Nginx, внутри контейнера порт 80
+      - "3000:3000"
     environment:
-      - REACT_APP_AUTH_URL=http://auth-service:8080
-      - REACT_APP_ORDERS_URL=http://order-service:8080
-      - REACT_APP_TRACKING_URL=http://tracking-service:8080
-      - REACT_APP_ANALYTICS_URL=http://analytics-service:8080
+      - CHOKIDAR_USEPOLLING=true
+      - REACT_APP_AUTH_URL=http://localhost:8081
+      - REACT_APP_ORDERS_URL=http://localhost:8082
+      - REACT_APP_TRACKING_URL=http://localhost:8083
+      - REACT_APP_ANALYTICS_URL=http://localhost:8084
     depends_on:
       - auth-service
       - order-service

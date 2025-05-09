@@ -6,3 +6,11 @@ CREATE TABLE IF NOT EXISTS tracking_info (
   longitude DOUBLE PRECISION,
   updated_at TIMESTAMP NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS courier_tracking (
+  courier_id    TEXT PRIMARY KEY,
+  status        TEXT NOT NULL,
+  latitude      DOUBLE PRECISION NOT NULL,
+  longitude     DOUBLE PRECISION NOT NULL,
+  updated_at    TIMESTAMP WITHOUT TIME ZONE NOT NULL
+);
