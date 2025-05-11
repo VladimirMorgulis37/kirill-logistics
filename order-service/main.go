@@ -36,7 +36,7 @@ type Order struct {
 	AddressTo     string    `json:"address_to"`
 	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
-
+	CompletedAt   sql.NullTime `json:"completed_at"`
 	// Новые поля для расчёта доставки
 	Weight  float64 `json:"weight"`   // вес посылки (кг)
 	Length  float64 `json:"length"`   // длина (метры)
@@ -332,7 +332,7 @@ func main() {
 	})
 
 	r.GET("/orders", func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, COALESCE(courier_id, '') FROM orders")
+		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, completed_at, weight, length, width, height, urgency, COALESCE(courier_id, '') FROM orders")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -341,7 +341,7 @@ func main() {
 		var orders []Order
 		for rows.Next() {
 			var o Order
-			if err := rows.Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID); err != nil {
+			if err := rows.Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.CompletedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
@@ -353,8 +353,8 @@ func main() {
 	r.GET("/orders/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var o Order
-		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, COALESCE(courier_id, '') FROM orders WHERE id = $1"
-		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID)
+		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, completed_at, weight, length, width, height, urgency, COALESCE(courier_id, '') FROM orders WHERE id = $1"
+		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt,&o.CompletedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
@@ -371,7 +371,7 @@ func main() {
 		orderID := c.Param("id")
 
 		// Обновляем статус заказа на "завершённый".
-		query := "UPDATE orders SET status = $1 WHERE id = $2"
+		query := "UPDATE orders SET status = $1, completed_at = NOW() WHERE id = $2"
 		_, err := db.Exec(query, "завершён", orderID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -386,10 +386,7 @@ func main() {
 		}
 		if courierID != "" {
 			// 3. Обновляем статус курьера на "available" и убираем active_order_id
-			_, err = db.Exec(`
-				UPDATE couriers SET status = 'available', active_order_id = NULL
-				WHERE id = $1
-			`, courierID)
+			_, err = db.Exec(`UPDATE couriers SET status = 'available', active_order_id = NULL WHERE id = $1`, courierID)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления статуса курьера: " + err.Error()})
 				return

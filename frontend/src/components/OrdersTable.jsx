@@ -24,6 +24,20 @@ export default function OrdersTable({
     { field: "address_from", headerName: "Откуда", width: 200 },
     { field: "address_to", headerName: "Куда", width: 200 },
     {
+      field: "created_at",
+      headerName: "Создан",
+      width: 160,
+      valueFormatter: (params) =>
+        params?.value ? new Date(params.value).toLocaleString() : "-"
+    },
+    {
+      field: "completed_at",
+      headerName: "Завершён",
+      width: 160,
+      valueFormatter: (params) =>
+        params?.value ? new Date(params.value).toLocaleString() : "-"
+    },
+    {
       field: "status",
       headerName: "Статус",
       width: 120,
@@ -81,8 +95,9 @@ export default function OrdersTable({
   ];
 
   return (
-    <Box sx={{ height: 600, width: "100%" }}>
+    <Box sx={{ height: 600, width: "100%"}}>
       <DataGrid
+        columnHeaderHeight={100}
         rows={orders}
         columns={columns}
         getRowId={(row) => row.id}

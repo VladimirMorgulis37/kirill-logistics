@@ -6,33 +6,32 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
 )
 
-// DB-соединение
 var db *sql.DB
 
-// initDB устанавливает соединение с базой данных analytics-db.
-// Переменные окружения: DB_HOST, DB_USER, DB_PASSWORD, DB_NAME должны быть заданы.
+// initDB устанавливает соединение с базой данных аналитики.
 func initDB() (*sql.DB, error) {
 	host := os.Getenv("DB_HOST")
 	user := os.Getenv("DB_USER")
 	password := os.Getenv("DB_PASSWORD")
 	dbname := os.Getenv("DB_NAME")
-	port := "5432" // В контейнере PostgreSQL слушает на 5432
+	port := "5432"
 
-	psqlInfo := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		host, port, user, password, dbname)
-	database, err := sql.Open("postgres", psqlInfo)
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, err
 	}
-	if err = database.Ping(); err != nil {
+	if err := db.Ping(); err != nil {
 		return nil, err
 	}
-	return database, nil
+	return db, nil
 }
 
 func main() {
@@ -42,45 +41,110 @@ func main() {
 		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
 
-	// Инициализация роутера Gin
 	r := gin.Default()
 
-	// Health-check endpoint.
+	// Health-check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// Эндпоинт для получения агрегированных данных аналитики.
-	// В данном примере производится выборка последней строки из таблицы order_stats.
-	r.GET("/analytics/stats", getAnalyticsStats)
+	// Общая статистика заказов с фильтром по периоду
+	r.GET("/analytics/general", getGeneralStats)
 
-	// Запуск сервиса на порту 8080
-	r.Run(":8080")
+	if err := r.Run(":8081"); err != nil {
+		log.Fatalf("Ошибка запуска сервера: %v", err)
+	}
 }
 
-// getAnalyticsStats выбирает последнюю запись статистики из таблицы order_stats.
-// Предполагается, что таблица order_stats имеет следующую схему:
-//   id SERIAL PRIMARY KEY,
-//   total_orders INTEGER,
-//   new_orders INTEGER,
-//   completed_orders INTEGER,
-//   calculated_at TIMESTAMP NOT NULL
-func getAnalyticsStats(c *gin.Context) {
-	var total, newOrders, completed int
+// GeneralStatsResponse отвечает общей статистикой заказов.
+type GeneralStatsResponse struct {
+	TotalOrders               int     `json:"total_orders"`
+	ActiveOrders              int     `json:"active_orders"`
+	CompletedOrders           int     `json:"completed_orders"`
+	AverageCompletionTimeSecs float64 `json:"average_completion_time_seconds"`
+}
 
-	query := "SELECT total_orders, new_orders, completed_orders FROM order_stats ORDER BY calculated_at DESC LIMIT 1"
-	err := db.QueryRow(query).Scan(&total, &newOrders, &completed)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Данные аналитики не найдены"})
+// getGeneralStats вычисляет метрики по заказам за выбранный период.
+func getGeneralStats(c *gin.Context) {
+	// Парсим параметры периода
+	fromParam := c.Query("from")
+	toParam := c.Query("to")
+	var fromTime, toTime time.Time
+	var err error
+	if fromParam != "" {
+		fromTime, err = time.Parse("2006-01-02", fromParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date format, use YYYY-MM-DD"})
 			return
 		}
+	} else {
+		fromTime = time.Time{} // минимум
+	}
+	if toParam != "" {
+		// конец дня
+		tmp, err := time.Parse("2006-01-02", toParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date format, use YYYY-MM-DD"})
+			return
+		}
+		toTime = tmp.Add(24*time.Hour - time.Nanosecond)
+	} else {
+		toTime = time.Now()
+	}
+
+	// 1. Общее количество заказов
+	var total int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM orders WHERE created_at >= $1 AND created_at <= $2`,
+		fromTime, toTime,
+	).Scan(&total)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"total_orders":     total,
-		"new_orders":       newOrders,
-		"completed_orders": completed,
-	})
+
+	// 2. Активные заказы (status != 'завершён')
+	var active int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM orders WHERE status <> 'завершён' AND created_at >= $1 AND created_at <= $2`,
+		fromTime, toTime,
+	).Scan(&active)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 3. Выполненные заказы
+	var completed int
+	err = db.QueryRow(
+		`SELECT COUNT(*) FROM orders WHERE status = 'завершён' AND completed_at >= $1 AND completed_at <= $2`,
+		fromTime, toTime,
+	).Scan(&completed)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 4. Среднее время выполнения (сек)
+	var avgSecs sql.NullFloat64
+	err = db.QueryRow(
+		`SELECT EXTRACT(EPOCH FROM AVG(completed_at - created_at)) FROM orders WHERE status = 'завершён' AND completed_at >= $1 AND completed_at <= $2`,
+		fromTime, toTime,
+	).Scan(&avgSecs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp := GeneralStatsResponse{
+		TotalOrders:               total,
+		ActiveOrders:              active,
+		CompletedOrders:           completed,
+		AverageCompletionTimeSecs: 0,
+	}
+	if avgSecs.Valid {
+		resp.AverageCompletionTimeSecs = avgSecs.Float64
+	}
+
+	c.JSON(http.StatusOK, resp)
 }

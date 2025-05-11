@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS orders (
     address_to VARCHAR(255),
     status VARCHAR(50),
     created_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
     weight DOUBLE PRECISION,
     length DOUBLE PRECISION,
     width DOUBLE PRECISION,
@@ -29,6 +30,4 @@ CREATE TABLE IF NOT EXISTS couriers (
 ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS courier_id VARCHAR(50)
     REFERENCES couriers(id);
-
-ALTER TABLE orders
   ALTER COLUMN courier_id DROP NOT NULL;
