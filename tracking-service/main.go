@@ -160,7 +160,21 @@ func main() {
         }
         c.JSON(http.StatusCreated, ct)
     })
-
+	r.GET("/couriers/tracking/:courierId", func(c *gin.Context) {
+		courierId := c.Param("courierId")
+		var ct CourierTracking
+		query := "SELECT courier_id, status, latitude, longitude, updated_at FROM courier_tracking WHERE courier_id = $1"
+		err := db.QueryRow(query, courierId).Scan(&ct.CourierID, &ct.Status, &ct.Latitude, &ct.Longitude, &ct.UpdatedAt)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Курьер не найден"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, ct)
+	})
 	// POST /tracking – принимает обновления от курьера.
 	r.POST("/tracking", func(c *gin.Context) {
 		var update TrackingInfo

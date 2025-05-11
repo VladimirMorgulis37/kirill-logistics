@@ -44,6 +44,8 @@ type Order struct {
 	Width   float64 `json:"width"`    // ширина (метры)
 	Height  float64 `json:"height"`   // высота (метры)
 	Urgency int     `json:"urgency"`  // 1 - стандартная, 2 - экспресс
+
+	CourierID string `json:"courier_id"`
 }
 
 var db *sql.DB
@@ -145,6 +147,25 @@ func assignCourierHandler(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления заказа"})
         return
     }
+
+	_, err = db.Exec(
+		"UPDATE couriers SET active_order_id = $1 WHERE id = $2",
+		orderID, body.CourierID,
+	)
+	if err != nil {
+        log.Printf("assignCourierHandler: DB update error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления курьера"})
+		return
+	}
+	row := db.QueryRow("SELECT courier_id FROM orders WHERE id = $1", orderID)
+	var courierID string
+	_ = row.Scan(&courierID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "Курьер назначен",
+		"courier_id": courierID,
+	})
+
     rows, _ := res.RowsAffected()
     if rows == 0 {
         c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
@@ -308,7 +329,7 @@ func main() {
 	})
 
 	r.GET("/orders", func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency FROM orders")
+		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, courier_id FROM orders")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -317,7 +338,7 @@ func main() {
 		var orders []Order
 		for rows.Next() {
 			var o Order
-			if err := rows.Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency); err != nil {
+			if err := rows.Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
@@ -329,8 +350,8 @@ func main() {
 	r.GET("/orders/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var o Order
-		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency FROM orders WHERE id = $1"
-		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency)
+		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, courier_id FROM orders WHERE id = $1"
+		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})

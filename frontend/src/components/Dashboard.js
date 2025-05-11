@@ -152,11 +152,16 @@ export default function Dashboard({ token, onLogout }) {
       },
       body: JSON.stringify({ courier_id: courierId })
     })
-      .then(r => r.json())
-      .then(() => {
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => {
         setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, courier_id: courierId } : o)));
+        setOrderData(prev =>
+          prev && prev.id === orderId
+            ? { ...prev, courier_id: data.courier_id }
+            : prev
+        );
       })
-      .catch(console.error);
+    .catch(console.error);
   };
 
   return (

@@ -1,5 +1,3 @@
-// src/components/CourierMap.jsx
-
 import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
@@ -56,7 +54,7 @@ export default function CourierMap({ orderId, token }) {
 
   // 3) Поллинг за позицией курьера по его ID
   useEffect(() => {
-    if (!orderData?.courier_id) return;
+    if (!orderData || !orderData.courier_id) return;
     const courierId = orderData.courier_id;
     const endpoint  = `${API_URLS.tracking}/couriers/tracking/${courierId}`;
 
@@ -66,10 +64,17 @@ export default function CourierMap({ orderId, token }) {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (res.ok) {
-          const { latitude, longitude } = await res.json();
-          setCourierPos([latitude, longitude]);
+          // Поддерживаем поля latitude и longtitude, а также longitude
+          const data = await res.json();
+          const latitude = data.latitude;
+          const longitude = data.longitude ?? data.longtitude;
+          if (latitude != null && longitude != null) {
+            setCourierPos([latitude, longitude]);
+          }
         }
-      } catch { /* игнорируем ошибки */ }
+      } catch {
+        // игнорируем ошибки
+      }
     };
 
     // Сразу и потом каждые 5 секунд
@@ -80,7 +85,12 @@ export default function CourierMap({ orderId, token }) {
 
   // Центр карты: либо курьер, либо Москва
   const center = courierPos || [55.7558, 37.6176];
-
+  useEffect(() => {
+    console.log("✅ courierPos:", courierPos);
+  }, [courierPos]);
+  useEffect(() => {
+  console.log("🧾 orderData:", orderData);
+}, [orderData]);
   return (
     <MapContainer center={center} zoom={12} style={{ height: '400px', width: '100%' }}>
       <TileLayer
