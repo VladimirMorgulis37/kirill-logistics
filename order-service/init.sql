@@ -29,3 +29,6 @@ CREATE TABLE IF NOT EXISTS couriers (
 ALTER TABLE orders
   ADD COLUMN IF NOT EXISTS courier_id VARCHAR(50)
     REFERENCES couriers(id);
+
+ALTER TABLE orders
+  ALTER COLUMN courier_id DROP NOT NULL;

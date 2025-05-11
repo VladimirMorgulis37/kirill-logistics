@@ -13,7 +13,7 @@ export default function Dashboard({ token, onLogout }) {
   const [newCourierName, setNewCourierName] = useState("");
   const [newCourierPhone, setNewCourierPhone] = useState("");
   const [newCourierVehicle, setNewCourierVehicle] = useState("foot");
-  const [newCourierLat, setNewCourierLat] = useState(55.7558);  // Москва по умолчанию
+  const [newCourierLat, setNewCourierLat] = useState(55.7558);
   const [newCourierLng, setNewCourierLng] = useState(37.6176);
   const [newOrder, setNewOrder] = useState({
     senderName: "",
@@ -29,6 +29,7 @@ export default function Dashboard({ token, onLogout }) {
 
   // Загрузка курьеров и заказов
   useEffect(() => {
+    // курьеры
     fetch(`${API_URLS.orders}/couriers`, {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -37,30 +38,35 @@ export default function Dashboard({ token, onLogout }) {
         return res.json();
       })
       .then(data => {
-        const list = Array.isArray(data) ? data : [];
-        setCouriers(list);
+        setCouriers(Array.isArray(data) ? data : []);
       })
       .catch(err => {
         console.error(err);
-        setCouriers([]); // на всякий случай
+        setCouriers([]);
       });
 
-      fetch(`${API_URLS.orders}/orders`, {
-        headers: { Authorization: `Bearer ${token}` },
+    // заказы
+    fetch(`${API_URLS.orders}/orders`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async res => {
+        const text = await res.text();
+        try {
+          return JSON.parse(text);
+        } catch (e) {
+          console.error("Ответ /orders не JSON:", text);
+          throw new Error("Сервер вернул некорректный ответ");
+        }
       })
-        .then(res => {
-          if (!res.ok) throw new Error("Не удалось загрузить заказы");
-          return res.json();
-        })
-        .then(data => {
-          const list = Array.isArray(data) ? data : [];
-          setOrders(list);
-          if (list.length) setSel(list[0].id);
-        })
-        .catch(err => {
-          console.error(err);
-          setOrders([]);
-        });
+      .then(data => {
+        const list = Array.isArray(data) ? data : [];
+        setOrders(list);
+        if (list.length) setSel(list[0].id);
+      })
+      .catch(err => {
+        console.error(err);
+        setOrders([]);
+      });
   }, [token]);
 
   // Обработчики
@@ -87,11 +93,14 @@ export default function Dashboard({ token, onLogout }) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     })
-      .then(r => r.json())
+      .then(res => {
+        if (!res.ok) throw new Error("Не удалось добавить заказ");
+        return res.json();
+      })
       .then(o => {
         setOrders(prev => [...prev, o]);
         setSel(o.id);
@@ -115,10 +124,13 @@ export default function Dashboard({ token, onLogout }) {
         latitude: parseFloat(newCourierLat),
         longitude: parseFloat(newCourierLng),
         status: "available",
-        active_order_id: ""
+        active_order_id: "",
       }),
     })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error("Не удалось добавить курьера");
+        return res.json();
+      })
       .then(c => {
         setCouriers(prev => [...prev, c]);
         setNewCourierName("");
@@ -133,10 +145,10 @@ export default function Dashboard({ token, onLogout }) {
   const handleDeleteOrder = id => {
     fetch(`${API_URLS.orders}/orders/${id}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
     })
-      .then(r => {
-        if (!r.ok) throw new Error();
+      .then(res => {
+        if (!res.ok) throw new Error();
         setOrders(prev => prev.filter(o => o.id !== id));
         if (sel === id) setSel(orders[0]?.id || "");
       })
@@ -148,20 +160,24 @@ export default function Dashboard({ token, onLogout }) {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ courier_id: courierId })
+      body: JSON.stringify({ courier_id: courierId }),
     })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => {
-        setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, courier_id: courierId } : o)));
-        setOrderData(prev =>
-          prev && prev.id === orderId
-            ? { ...prev, courier_id: data.courier_id }
-            : prev
-        );
+      .then(res => {
+        if (!res.ok) throw new Error("Не удалось назначить курьера");
+        return res.json();
       })
-    .catch(console.error);
+      .then(() => {
+        setOrders(prev => prev.map(o =>
+          o.id === orderId
+            ? { ...o, courier_id: courierId }
+            : o
+        ));
+        // перезагружаем карту при новом курьере
+        if (sel === orderId) setSel(orderId);
+      })
+      .catch(console.error);
   };
 
   return (
@@ -381,10 +397,7 @@ export default function Dashboard({ token, onLogout }) {
                       {o.courier_id
                         ? couriers.find(c => c.id === o.courier_id)?.name
                         : 'Не назначен'}
-                      <select
-                        value={o.courier_id || ''}
-                        onChange={e => handleAssignCourier(o.id, e.target.value)}
-                      >
+                        <select value={o.courier_id || ''} onChange={e => handleAssignCourier(o.id, e.target.value)}>
                         <option value="">— выбрать —</option>
                         {couriers.map(c => (
                           <option key={c.id} value={c.id}>{c.name}</option>

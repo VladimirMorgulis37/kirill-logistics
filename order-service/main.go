@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -128,6 +127,8 @@ func createCourierHandler(c *gin.Context) {
 
 func assignCourierHandler(c *gin.Context) {
     orderID := c.Param("id")
+
+    // 1. Парсим входной JSON
     var body struct {
         CourierID string `json:"courier_id"`
     }
@@ -137,83 +138,80 @@ func assignCourierHandler(c *gin.Context) {
         return
     }
 
-    // 1) Обновляем заказ
-    res, err := db.Exec(
-        "UPDATE orders SET courier_id = $1 WHERE id = $2",
-        body.CourierID, orderID,
-    )
+    // 2. Начинаем транзакцию (чтобы обновления orders и couriers были атомарными)
+    tx, err := db.Begin()
+    if err != nil {
+        log.Printf("assignCourierHandler: begin tx error: %v", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка начала транзакции"})
+        return
+    }
+    defer tx.Rollback()
+
+    // 3. Обновляем orders и couriers в зависимости от body.CourierID
+    var res sql.Result
+    if body.CourierID == "" {
+        // отвязываем курьера
+        res, err = tx.Exec("UPDATE orders SET courier_id = NULL WHERE id = $1", orderID)
+        if err == nil {
+            // убираем active_order_id у всех курьеров, у которых он был
+            _, err = tx.Exec("UPDATE couriers SET active_order_id = NULL WHERE active_order_id = $1", orderID)
+        }
+    } else {
+        // привязываем курьера
+        res, err = tx.Exec("UPDATE orders SET courier_id = $1 WHERE id = $2", body.CourierID, orderID)
+        if err == nil {
+            _, err = tx.Exec("UPDATE couriers SET active_order_id = $1 WHERE id = $2", orderID, body.CourierID)
+        }
+    }
     if err != nil {
         log.Printf("assignCourierHandler: DB update error: %v", err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления заказа"})
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления заказа или курьера"})
         return
     }
 
-	_, err = db.Exec(
-		"UPDATE couriers SET active_order_id = $1 WHERE id = $2",
-		orderID, body.CourierID,
-	)
-	if err != nil {
-        log.Printf("assignCourierHandler: DB update error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления курьера"})
-		return
-	}
-	row := db.QueryRow("SELECT courier_id FROM orders WHERE id = $1", orderID)
-	var courierID string
-	_ = row.Scan(&courierID)
-
-	c.JSON(http.StatusOK, gin.H{
-		"status": "Курьер назначен",
-		"courier_id": courierID,
-	})
-
-    rows, _ := res.RowsAffected()
-    if rows == 0 {
+    // 4. Проверяем, был ли обновлён хоть один заказ
+    rowsAffected, err := res.RowsAffected()
+    if err != nil {
+        log.Printf("assignCourierHandler: RowsAffected error: %v", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки обновления заказа"})
+        return
+    }
+    if rowsAffected == 0 {
         c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
         return
     }
 
-    // 2) Вызываем tracking-service
-    trackingURL := os.Getenv("TRACKING_URL")
-    if trackingURL == "" {
-        log.Println("assignCourierHandler: TRACKING_URL не задан")
-    } else {
+    // 5. Коммитим транзакцию
+    if err := tx.Commit(); err != nil {
+        log.Printf("assignCourierHandler: commit tx error: %v", err)
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения изменений"})
+        return
+    }
+
+    // 6. Вызываем tracking-service (если задан TRACKING_URL)
+    if trackingURL := os.Getenv("TRACKING_URL"); trackingURL != "" && body.CourierID != "" {
         rec := map[string]interface{}{
             "order_id":   orderID,
             "courier_id": body.CourierID,
             "status":     "assigned",
-            // latitude/longitude можно опустить или передать актуальные,
-            // но в SQL-upsert они не перезапишут старые значения
         }
-        payload, err := json.Marshal(rec)
-        if err != nil {
-            log.Printf("assignCourierHandler: marshaling error: %v", err)
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка формирования запроса трекинга"})
-            return
-        }
-
+        payload, _ := json.Marshal(rec)
         endpoint := fmt.Sprintf("%s/couriers/tracking", trackingURL)
-        log.Printf("assignCourierHandler: POST %s payload=%s", endpoint, string(payload))
+        log.Printf("assignCourierHandler: POST %s payload=%s", endpoint, payload)
         resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
         if err != nil {
             log.Printf("assignCourierHandler: POST to tracking failed: %v", err)
-            c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка вызова сервиса трекинга"})
-            return
+            // не возвращаем ошибку пользователю, т.к. основной кейс уже выполнен
+        } else {
+            resp.Body.Close()
         }
-        defer resp.Body.Close()
-
-        if resp.StatusCode >= 300 {
-            bodyBytes, _ := io.ReadAll(resp.Body)
-            log.Printf("assignCourierHandler: tracking returned %d: %s", resp.StatusCode, string(bodyBytes))
-            c.JSON(http.StatusInternalServerError, gin.H{
-                "error": fmt.Sprintf("tracking-service: %s", string(bodyBytes)),
-            })
-            return
-        }
-
-        log.Printf("assignCourierHandler: tracking-service responded %s", resp.Status)
     }
 
-    c.JSON(http.StatusOK, gin.H{"status": "Курьер назначен"})
+    // 7. Отправляем единый JSON-ответ
+    c.JSON(http.StatusOK, gin.H{
+        "status":     "Курьер обновлён",
+        "courier_id": body.CourierID,
+    })
 }
 
 // publishOrderCompletedEvent публикует событие завершённого заказа в RabbitMQ.
@@ -329,7 +327,7 @@ func main() {
 	})
 
 	r.GET("/orders", func(c *gin.Context) {
-		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, courier_id FROM orders")
+		rows, err := db.Query("SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, COALESCE(courier_id, '') FROM orders")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -350,7 +348,7 @@ func main() {
 	r.GET("/orders/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var o Order
-		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, courier_id FROM orders WHERE id = $1"
+		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, COALESCE(courier_id, '') FROM orders WHERE id = $1"
 		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID)
 		if err != nil {
 			if err == sql.ErrNoRows {

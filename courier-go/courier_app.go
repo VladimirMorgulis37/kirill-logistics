@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 )
 
-// Order описывает структуру заказа, возвращаемую Order Service.
+// Order описывает структуру заказа из Order Service.
 type Order struct {
 	ID            string  `json:"id"`
 	SenderName    string  `json:"sender_name"`
@@ -24,7 +27,13 @@ type Order struct {
 	Urgency       int     `json:"urgency"`
 }
 
-// DeliveryRequest содержит параметры для расчёта доставки.
+// GeoResult хранит ответ геокодера.
+type GeoResult struct {
+	Lat string `json:"lat"`
+	Lon string `json:"lon"`
+}
+
+// DeliveryRequest содержит данные для расчёта стоимости.
 type DeliveryRequest struct {
 	FromLat float64 `json:"from_lat"`
 	FromLng float64 `json:"from_lng"`
@@ -37,13 +46,13 @@ type DeliveryRequest struct {
 	Urgency int     `json:"urgency"`
 }
 
-// DeliveryResponse получает рассчитанную стоимость доставки.
+// DeliveryResponse хранит ответ сервиса расчёта стоимости.
 type DeliveryResponse struct {
 	EstimatedCost float64 `json:"estimated_cost"`
 	Currency      string  `json:"currency"`
 }
 
-// TrackingInfo — данные, которые отправляются в Tracking Service.
+// TrackingInfo отправляется в Tracking Service.
 type TrackingInfo struct {
 	OrderID   string  `json:"order_id"`
 	CourierID string  `json:"courier_id"`
@@ -52,105 +61,138 @@ type TrackingInfo struct {
 	Longitude float64 `json:"longitude"`
 }
 
-func main() {
-	// 0) Настройки
-	orderID := "20250418221121"          // замените на ваш реальный orderID
-	trackingURL := "http://localhost:8083/tracking"
-	courierID := "courier_123"
+// moveTowards плавно перемещает курьера к целевой точке, отправляя трекинг.
+func moveTowards(lat, lon *float64, targetLat, targetLon float64, steps int, orderID, courierID, trackingURL string) {
+	stepLat := (targetLat - *lat) / float64(steps)
+	stepLon := (targetLon - *lon) / float64(steps)
 
-	// 1) Получаем данные заказа
-	orderURL := "http://localhost:8082/orders/" + orderID
-	resp, err := http.Get(orderURL)
-	if err != nil {
-		log.Fatalf("Ошибка получения информации о заказе: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("При получении заказа получен статус %d", resp.StatusCode)
-	}
+	for i := 0; i < steps; i++ {
+		*lat += stepLat
+		*lon += stepLon
 
-	var order Order
-	if err := json.NewDecoder(resp.Body).Decode(&order); err != nil {
-		log.Fatalf("Ошибка декодирования ответа Order Service: %v", err)
-	}
-	log.Printf("Получен заказ: %+v", order)
-
-	// 2) Расчёт стоимости доставки
-	deliveryReq := DeliveryRequest{
-		FromLat: order.AddressFromLat(), // если есть функция для получения координат
-		FromLng: order.AddressFromLng(),
-		ToLat:   order.AddressToLat(),
-		ToLng:   order.AddressToLng(),
-		Weight:  order.Weight,
-		Length:  order.Length,
-		Width:   order.Width,
-		Height:  order.Height,
-		Urgency: order.Urgency,
-	}
-	payload, err := json.Marshal(deliveryReq)
-	if err != nil {
-		log.Fatalf("Ошибка маршалинга запроса доставки: %v", err)
-	}
-	deliveryURL := "http://localhost:8086/calculate"
-	dRes, err := http.Post(deliveryURL, "application/json", bytes.NewReader(payload))
-	if err != nil {
-		log.Fatalf("Ошибка запроса расчёта доставки: %v", err)
-	}
-	defer dRes.Body.Close()
-	var deliveryResp DeliveryResponse
-	if err := json.NewDecoder(dRes.Body).Decode(&deliveryResp); err != nil {
-		log.Fatalf("Ошибка декодирования ответа Delivery Cost Service: %v", err)
-	}
-	log.Printf("Расчитанная стоимость доставки: %.2f %s", deliveryResp.EstimatedCost, deliveryResp.Currency)
-
-	// 3) Эмуляция процесса доставки + отправка трекинга каждую 2 секунды
-	log.Printf("Курьер приступает к доставке заказа %s...", orderID)
-	lat := deliveryReq.FromLat
-	lon := deliveryReq.FromLng
-	for i := 0; i < 5; i++ {
 		update := TrackingInfo{
 			OrderID:   orderID,
 			CourierID: courierID,
 			Status:    "в пути",
-			Latitude:  lat,
-			Longitude: lon,
+			Latitude:  *lat,
+			Longitude: *lon,
 		}
 		data, _ := json.Marshal(update)
 		resp, err := http.Post(trackingURL, "application/json", bytes.NewReader(data))
 		if err != nil {
-			log.Printf("Ошибка отправки трекинга: %v", err)
+			log.Printf("Ошибка трекинга: %v", err)
 		} else {
-			log.Printf("Трекинг отправлен: %s", resp.Status)
+			log.Printf("📍 Трекинг %d: lat=%.5f, lon=%.5f", i+1, *lat, *lon)
 			resp.Body.Close()
 		}
-		// Сдвигаем координаты для эмуляции движения
-		lat += 0.01
-		lon += 0.01
 		time.Sleep(2 * time.Second)
 	}
-
-	// 4) Завершаем заказ в Order Service
-	finishURL := "http://localhost:8082/orders/" + orderID + "/finish"
-	reqFinish, err := http.NewRequest("PUT", finishURL, nil)
-	if err != nil {
-		log.Fatalf("Ошибка создания запроса для завершения заказа: %v", err)
-	}
-	client := &http.Client{}
-	respFinish, err := client.Do(reqFinish)
-	if err != nil {
-		log.Fatalf("Ошибка выполнения запроса для завершения заказа: %v", err)
-	}
-	defer respFinish.Body.Close()
-	var finishResult map[string]interface{}
-	if err := json.NewDecoder(respFinish.Body).Decode(&finishResult); err != nil {
-		log.Fatalf("Ошибка декодирования ответа Order Service: %v", err)
-	}
-	log.Printf("Заказ завершён. Ответ Order Service: %+v", finishResult)
 }
 
-// Ниже—пример заглушек, если адреса в заказе хранятся в виде строк.
-// Замените на вашу реальную логику получения координат.
-func (o Order) AddressFromLat() float64 { return 55.7558 }
-func (o Order) AddressFromLng() float64 { return 37.6176 }
-func (o Order) AddressToLat() float64   { return 59.9311 }
-func (o Order) AddressToLng() float64   { return 30.3609 }
+// geocode получает координаты по текстовому адресу через Nominatim.
+func geocode(address string) (float64, float64, error) {
+	endpoint := "https://nominatim.openstreetmap.org/search?format=json&q=" + url.QueryEscape(address)
+	req, _ := http.NewRequest("GET", endpoint, nil)
+	req.Header.Set("User-Agent", "courier-simulator/1.0")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("геокодер: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var results []GeoResult
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return 0, 0, fmt.Errorf("распаковка геоданных: %w", err)
+	}
+	if len(results) == 0 {
+		return 0, 0, fmt.Errorf("адрес не найден: %s", address)
+	}
+
+	lat, _ := strconv.ParseFloat(results[0].Lat, 64)
+	lon, _ := strconv.ParseFloat(results[0].Lon, 64)
+	return lat, lon, nil
+}
+
+func main() {
+	// Параметры эмуляции (подставьте ваши)
+	orderID := "20250418221121"
+	courierID := ""
+	orderURL := "http://localhost:8082/orders/" + orderID
+	trackingURL := "http://localhost:8083/couriers/tracking"
+	deliveryURL := "http://localhost:8086/calculate"
+
+	// 1) Получаем заказ
+	resp, err := http.Get(orderURL)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		log.Fatalf("не удалось получить заказ %s: %v", orderID, err)
+	}
+	defer resp.Body.Close()
+	var order Order
+	if err := json.NewDecoder(resp.Body).Decode(&order); err != nil {
+		log.Fatalf("ошибка декодирования заказа: %v", err)
+	}
+	log.Printf("Заказ: %+v", order)
+
+	// 2) Геокодинг отправителя и получателя
+	fromLat, fromLng, err := geocode(order.AddressFrom)
+	if err != nil {
+		log.Fatalf("геокодирование отправителя: %v", err)
+	}
+	toLat, toLng, err := geocode(order.AddressTo)
+	if err != nil {
+		log.Fatalf("геокодирование получателя: %v", err)
+	}
+	log.Printf("Отправитель: %.5f, %.5f; Получатель: %.5f, %.5f", fromLat, fromLng, toLat, toLng)
+
+	// 3) Расчёт стоимости доставки
+	dReq := DeliveryRequest{
+		FromLat: fromLat, FromLng: fromLng,
+		ToLat: toLat, ToLng: toLng,
+		Weight: order.Weight, Length: order.Length,
+		Width: order.Width, Height: order.Height,
+		Urgency: order.Urgency,
+	}
+	b, _ := json.Marshal(dReq)
+	dResp, err := http.Post(deliveryURL, "application/json", bytes.NewReader(b))
+	if err != nil {
+		log.Fatalf("расчёт доставки: %v", err)
+	}
+	defer dResp.Body.Close()
+	var dRes DeliveryResponse
+	if err := json.NewDecoder(dResp.Body).Decode(&dRes); err != nil {
+		log.Fatalf("декодирование стоимости: %v", err)
+	}
+	log.Printf("Стоимость: %.2f %s", dRes.EstimatedCost, dRes.Currency)
+
+	// 4) Текущие координаты курьера
+	ctURL := "http://localhost:8083/couriers/tracking/" + courierID
+	respCT, err := http.Get(ctURL)
+	if err != nil || respCT.StatusCode != http.StatusOK {
+		log.Fatalf("координаты курьера: %v", err)
+	}
+	defer respCT.Body.Close()
+	var ct TrackingInfo
+	if err := json.NewDecoder(respCT.Body).Decode(&ct); err != nil {
+		log.Fatalf("декодирование трекинга: %v", err)
+	}
+	lat := ct.Latitude
+	lon := ct.Longitude
+	log.Printf("Старт: %.5f, %.5f", lat, lon)
+
+	// 5) Эмуляция маршрута: к отправителю, затем к получателю
+	moveTowards(&lat, &lon, fromLat, fromLng, 10, orderID, courierID, trackingURL)
+	moveTowards(&lat, &lon, toLat, toLng, 15, orderID, courierID, trackingURL)
+
+	// 6) Завершение заказа
+	finishURL := orderURL + "/finish"
+	rf, _ := http.NewRequest("PUT", finishURL, nil)
+	client := &http.Client{}
+	resF, err := client.Do(rf)
+	if err != nil || resF.StatusCode != http.StatusOK {
+		log.Fatalf("завершение заказа: %v", err)
+	}
+	defer resF.Body.Close()
+	log.Println("Заказ завершён")
+}
