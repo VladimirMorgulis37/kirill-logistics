@@ -109,7 +109,6 @@ func createCourierHandler(c *gin.Context) {
 	endpoint := "http://tracking-service:8080/couriers/tracking"
     rec := map[string]interface{}{
         "courier_id": cur.ID,
-        "status":     cur.Status,
         "latitude":   cur.Latitude,
         "longitude":  cur.Longitude,
     }
@@ -187,13 +186,19 @@ func assignCourierHandler(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения изменений"})
         return
     }
-
+	var lat, lon float64
+	err = db.QueryRow(`SELECT latitude, longitude FROM couriers WHERE id = $1`, body.CourierID).Scan(&lat, &lon)
+	if err != nil {
+		log.Printf("assignCourierHandler: не удалось получить координаты курьера %s: %v", body.CourierID, err)
+		lat, lon = 0, 0 // fallback
+	}
     // 6. Вызываем tracking-service (если задан TRACKING_URL)
     if trackingURL := os.Getenv("TRACKING_URL"); trackingURL != "" && body.CourierID != "" {
         rec := map[string]interface{}{
             "order_id":   orderID,
             "courier_id": body.CourierID,
-            "status":     "assigned",
+			"latitude":   lat,
+    		"longitude":  lon,
         }
         payload, _ := json.Marshal(rec)
         endpoint := fmt.Sprintf("%s/couriers/tracking", trackingURL)
@@ -372,7 +377,24 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-
+		// 2. Получаем courier_id из заказа
+		var courierID string
+		err = db.QueryRow("SELECT courier_id FROM orders WHERE id = $1", orderID).Scan(&courierID)
+		if err != nil && err != sql.ErrNoRows {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка получения курьера: " + err.Error()})
+			return
+		}
+		if courierID != "" {
+			// 3. Обновляем статус курьера на "available" и убираем active_order_id
+			_, err = db.Exec(`
+				UPDATE couriers SET status = 'available', active_order_id = NULL
+				WHERE id = $1
+			`, courierID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления статуса курьера: " + err.Error()})
+				return
+			}
+		}
 		// Публикуем событие в RabbitMQ, чтобы уведомить Notification Service.
 		if err := publishOrderCompletedEvent(orderID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отправки уведомления: " + err.Error()})

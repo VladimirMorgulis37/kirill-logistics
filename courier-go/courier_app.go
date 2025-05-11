@@ -25,6 +25,7 @@ type Order struct {
 	Width         float64 `json:"width"`
 	Height        float64 `json:"height"`
 	Urgency       int     `json:"urgency"`
+	CourierID     string  `json:"courier_id"`
 }
 
 // GeoResult хранит ответ геокодера.
@@ -53,12 +54,12 @@ type DeliveryResponse struct {
 }
 
 // TrackingInfo отправляется в Tracking Service.
-type TrackingInfo struct {
-	OrderID   string  `json:"order_id"`
+type CourierTracking struct {
 	CourierID string  `json:"courier_id"`
 	Status    string  `json:"status"`
 	Latitude  float64 `json:"latitude"`
 	Longitude float64 `json:"longitude"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 // moveTowards плавно перемещает курьера к целевой точке, отправляя трекинг.
@@ -70,12 +71,11 @@ func moveTowards(lat, lon *float64, targetLat, targetLon float64, steps int, ord
 		*lat += stepLat
 		*lon += stepLon
 
-		update := TrackingInfo{
-			OrderID:   orderID,
+		update := CourierTracking{
 			CourierID: courierID,
-			Status:    "в пути",
 			Latitude:  *lat,
 			Longitude: *lon,
+			UpdatedAt: time.Now().Format(time.RFC3339),
 		}
 		data, _ := json.Marshal(update)
 		resp, err := http.Post(trackingURL, "application/json", bytes.NewReader(data))
@@ -117,8 +117,7 @@ func geocode(address string) (float64, float64, error) {
 
 func main() {
 	// Параметры эмуляции (подставьте ваши)
-	orderID := "20250418221121"
-	courierID := ""
+	orderID := "20250511100158"
 	orderURL := "http://localhost:8082/orders/" + orderID
 	trackingURL := "http://localhost:8083/couriers/tracking"
 	deliveryURL := "http://localhost:8086/calculate"
@@ -134,6 +133,11 @@ func main() {
 		log.Fatalf("ошибка декодирования заказа: %v", err)
 	}
 	log.Printf("Заказ: %+v", order)
+
+	courierID := order.CourierID
+	if courierID == "" {
+		log.Fatalf("❌ У заказа %s не назначен courier_id", orderID)
+	}
 
 	// 2) Геокодинг отправителя и получателя
 	fromLat, fromLng, err := geocode(order.AddressFrom)
@@ -173,7 +177,7 @@ func main() {
 		log.Fatalf("координаты курьера: %v", err)
 	}
 	defer respCT.Body.Close()
-	var ct TrackingInfo
+	var ct CourierTracking
 	if err := json.NewDecoder(respCT.Body).Decode(&ct); err != nil {
 		log.Fatalf("декодирование трекинга: %v", err)
 	}
