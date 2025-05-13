@@ -68,6 +68,82 @@ func initDB() (*sql.DB, error) {
 	}
 	return database, nil
 }
+
+func publishEventToQueue(queueName string, payload any) error {
+	rabbitURL := os.Getenv("RABBITMQ_URL") // пример: "amqp://guest:guest@rabbitmq:5672/"
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		return fmt.Errorf("ошибка подключения к RabbitMQ: %w", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("ошибка открытия канала: %w", err)
+	}
+	defer ch.Close()
+
+	_, err = ch.QueueDeclare(
+		queueName, true, false, false, false, nil,
+	)
+	if err != nil {
+		return fmt.Errorf("ошибка объявления очереди: %w", err)
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации JSON: %w", err)
+	}
+
+	return ch.Publish(
+		"", queueName, false, false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		})
+}
+
+// publishOrderCreatedEvent публикует событие создания заказа
+func publishOrderCreatedEvent(orderID string) error {
+	rabbitURL := os.Getenv("RABBITMQ_URL") // пример: "amqp://guest:guest@rabbitmq:5672/"
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		return fmt.Errorf("ошибка подключения к RabbitMQ: %w", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("ошибка открытия канала: %w", err)
+	}
+	defer ch.Close()
+
+	_, err = ch.QueueDeclare(
+		"order_created", // Название очереди
+		true,            // durable
+		false, false, false, nil,
+	)
+	if err != nil {
+		return fmt.Errorf("ошибка объявления очереди: %w", err)
+	}
+
+	body, err := json.Marshal(map[string]string{
+		"event":    "order_created",
+		"order_id": orderID,
+		"status":   "новый",
+	})
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации JSON: %w", err)
+	}
+
+	return ch.Publish(
+		"", "order_created", false, false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		})
+}
+
 // Получение списка курьеров
 func getCouriersHandler(c *gin.Context) {
     rows, err := db.Query("SELECT id, name FROM couriers")
@@ -250,6 +326,7 @@ func publishOrderCompletedEvent(orderID string) error {
 	event := map[string]string{
 		"order_id": orderID,
 		"event":    "order_completed",
+		"status":   "завершён",
 		"message":  "Заказ успешно завершён и доставлен",
 	}
 	body, err := json.Marshal(event)
@@ -324,9 +401,14 @@ func main() {
 			o.Height,
 			o.Urgency,
 		)
+
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+		// 🔔 Публикация события order_created
+		if err := publishOrderCreatedEvent(o.ID); err != nil {
+			log.Printf("Ошибка публикации события order_created: %v", err)
 		}
 		c.JSON(http.StatusCreated, o)
 	})
@@ -385,8 +467,8 @@ func main() {
 			return
 		}
 		if courierID != "" {
-			// 3. Обновляем статус курьера на "available" и убираем active_order_id
-			_, err = db.Exec(`UPDATE couriers SET status = 'available', active_order_id = NULL WHERE id = $1`, courierID)
+			// 3. Обновляем статус курьера на "доступен" и убираем active_order_id
+			_, err = db.Exec(`UPDATE couriers SET status = 'доступен', active_order_id = NULL WHERE id = $1`, courierID)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления статуса курьера: " + err.Error()})
 				return

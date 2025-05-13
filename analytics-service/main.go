@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
+	"github.com/streadway/amqp"
 )
 
 var db *sql.DB
@@ -34,12 +36,135 @@ func initDB() (*sql.DB, error) {
 	return db, nil
 }
 
+func startRabbitConsumer() {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к RabbitMQ: %v", err)
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("Ошибка открытия канала: %v", err)
+	}
+
+	_, err = ch.QueueDeclare(
+		"order_created", true, false, false, false, nil,
+	)
+	if err != nil {
+		log.Fatalf("Ошибка объявления очереди: %v", err)
+	}
+
+	msgs, err := ch.Consume("order_created", "", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("Ошибка подписки на очередь: %v", err)
+	}
+
+	go func() {
+		for msg := range msgs {
+			log.Printf("Получено сообщение: %s", msg.Body)
+			handleOrderCreated(msg.Body)
+		}
+	}()
+}
+
+func startOrderCompletedConsumer() {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к RabbitMQ: %v", err)
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("Ошибка канала: %v", err)
+	}
+
+	_, err = ch.QueueDeclare("order_completed", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("Ошибка объявления очереди: %v", err)
+	}
+
+	msgs, err := ch.Consume("order_completed", "", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("Ошибка consume: %v", err)
+	}
+
+	go func() {
+		for msg := range msgs {
+			log.Printf("Получено завершение заказа: %s", msg.Body)
+			handleOrderCompleted(msg.Body)
+		}
+	}()
+}
+
+func handleOrderCreated(body []byte) {
+	var evt map[string]string
+	if err := json.Unmarshal(body, &evt); err != nil {
+		log.Printf("Некорректный JSON в событии: %v", err)
+		return
+	}
+
+	if evt["event"] == "order_created" {
+		_, err := db.Exec(`UPDATE general_stats SET total_orders = total_orders + 1`)
+		if err != nil {
+			log.Printf("Ошибка увеличения total_orders: %v", err)
+		} else {
+			log.Println("Аналитика обновлена: общий заказ добавлен")
+		}
+	}
+
+	if evt["status"] == "новый" {
+		_, err := db.Exec(`UPDATE general_stats SET active_orders = active_orders + 1`)
+		if err != nil {
+			log.Printf("Ошибка увеличения active_orders: %v", err)
+		} else {
+			log.Println("Аналитика обновлена: активный заказ добавлен")
+		}
+	}
+}
+
+func handleOrderCompleted(body []byte) {
+	var evt map[string]string
+	if err := json.Unmarshal(body, &evt); err != nil {
+		log.Printf("Некорректный JSON в order_completed: %v", err)
+		return
+	}
+
+	if evt["event"] == "order_completed" && evt["status"] == "завершён" {
+		tx, err := db.Begin()
+		if err != nil {
+			log.Printf("Ошибка начала транзакции: %v", err)
+			return
+		}
+		defer tx.Rollback()
+
+		_, err = tx.Exec(`UPDATE general_stats SET completed_orders = completed_orders + 1`)
+		if err != nil {
+			log.Printf("Ошибка обновления completed_orders: %v", err)
+			return
+		}
+
+		_, err = tx.Exec(`UPDATE general_stats SET active_orders = active_orders - 1 WHERE active_orders > 0`)
+		if err != nil {
+			log.Printf("Ошибка уменьшения active_orders: %v", err)
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			log.Printf("Ошибка коммита: %v", err)
+		} else {
+			log.Println("Аналитика обновлена: заказ завершён")
+		}
+	}
+}
+
 func main() {
 	var err error
 	db, err = initDB()
 	if err != nil {
 		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
+	go startRabbitConsumer()
+	go startOrderCompletedConsumer()
 
 	r := gin.Default()
 

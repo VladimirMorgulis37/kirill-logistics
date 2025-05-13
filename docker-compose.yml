@@ -181,6 +181,7 @@ services:
       - DB_USER=analytics_user
       - DB_PASSWORD=analytics_password
       - DB_NAME=analytics_db
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
 
   notification-service:
     build: ./notification-service
