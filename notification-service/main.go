@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"net/smtp"
 
 	"github.com/gin-gonic/gin"
 	"github.com/streadway/amqp"
@@ -113,6 +114,21 @@ func startConsumer() {
 	}()
 }
 
+func sendEmail(to, subject, body string) error {
+	from := os.Getenv("SMTP_USER")
+	password := os.Getenv("SMTP_PASS")
+	host := os.Getenv("SMTP_HOST")
+	port := os.Getenv("SMTP_PORT")
+	addr := fmt.Sprintf("%s:%s", host, port)
+
+	msg := []byte("To: " + to + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-version: 1.0;\r\nContent-Type: text/plain; charset=\"UTF-8\";\r\n\r\n" +
+		body + "\r\n")
+
+	auth := smtp.PlainAuth("", from, password, host)
+	return smtp.SendMail(addr, auth, from, []string{to}, msg)
+}
 // processNotification сохраняет уведомление в БД и имитирует отправку уведомления.
 func processNotification(msg NotificationMessage) error {
 	// Создаем уведомление со статусом "pending"
@@ -132,8 +148,13 @@ func processNotification(msg NotificationMessage) error {
 	if err != nil {
 		return err
 	}
-	// Здесь можно интегрировать вызов внешнего сервиса рассылки.
-	// Для демонстрации сразу обновляем статус на "sent".
+	err = sendEmail(n.Recipient, "Уведомление от службы доставки", n.Message)
+	if err != nil {
+		log.Printf("Ошибка отправки письма: %v", err)
+		_, _ = db.Exec("UPDATE notifications SET status = $1 WHERE id = $2", "failed", n.ID)
+		return err
+	}
+
 	_, err = db.Exec("UPDATE notifications SET status = $1 WHERE id = $2", "sent", n.ID)
 	if err != nil {
 		return err

@@ -196,6 +196,10 @@ services:
       - DB_PASSWORD=notification_password
       - DB_NAME=notification_db
       - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
+      - SMTP_HOST=smtp.mail.ru
+      - SMTP_PORT=587
+      - SMTP_USER=kirill_kudryavtsev@mail.ru
+      - SMTP_PASS=VP9KrUaqGxs3xjQShZRs
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 10s

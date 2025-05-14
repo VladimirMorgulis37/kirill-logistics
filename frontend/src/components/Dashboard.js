@@ -19,6 +19,7 @@ export default function Dashboard({ token, onLogout }) {
   const [courierStats, setCourierStats] = useState([]);
   const [newOrder, setNewOrder] = useState({
     senderName: "",
+    email: "",
     recipientName: "",
     addressFrom: "",
     addressTo: "",
@@ -98,6 +99,7 @@ export default function Dashboard({ token, onLogout }) {
     e.preventDefault();
     const payload = {
       sender_name: newOrder.senderName,
+      email: newOrder.email,
       recipient_name: newOrder.recipientName,
       address_from: newOrder.addressFrom,
       address_to: newOrder.addressTo,
@@ -123,7 +125,7 @@ export default function Dashboard({ token, onLogout }) {
       .then(o => {
         setOrders(prev => [...prev, o]);
         setSel(o.id);
-        setNewOrder({ senderName: "", recipientName: "", addressFrom: "", addressTo: "", weight: "", length: "", width: "", height: "", urgency: "1" });
+        setNewOrder({ senderName: "", email: "", recipientName: "", addressFrom: "", addressTo: "", weight: "", length: "", width: "", height: "", urgency: "1" });
       })
       .catch(console.error);
   };
@@ -224,6 +226,18 @@ export default function Dashboard({ token, onLogout }) {
                     type="text"
                     name="senderName"
                     value={newOrder.senderName}
+                    onChange={handleInputChange}
+                    required
+                  />
+                </label>
+              </div>
+              <div>
+                <label>
+                  Email отправителя:
+                  <input
+                    type="email"
+                    name="email"
+                    value={newOrder.email}
                     onChange={handleInputChange}
                     required
                   />

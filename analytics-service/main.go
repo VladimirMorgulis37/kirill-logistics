@@ -383,7 +383,7 @@ func main() {
 	r.GET("/analytics/general", getGeneralStats)
 	r.GET("/analytics/couriers", getCourierStats)
 
-	if err := r.Run(":8080	"); err != nil {
+	if err := r.Run(":8080"); err != nil {
 		log.Fatalf("Ошибка запуска сервера: %v", err)
 	}
 }

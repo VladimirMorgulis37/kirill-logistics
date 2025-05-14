@@ -46,6 +46,7 @@ type Order struct {
 	Urgency int     `json:"urgency"` // 1 - стандартная, 2 - экспресс
 
 	CourierID string `json:"courier_id"`
+	Email string `json:"email"` // Почта отправителя для уведомлений
 }
 
 var db *sql.DB
@@ -68,6 +69,38 @@ func initDB() (*sql.DB, error) {
 		return nil, err
 	}
 	return database, nil
+}
+
+func publishNotification(typ, recipient, message string) error {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		return fmt.Errorf("ошибка подключения к RabbitMQ: %w", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("ошибка открытия канала: %w", err)
+	}
+	defer ch.Close()
+
+	_, err = ch.QueueDeclare("notifications", true, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("ошибка объявления очереди: %w", err)
+	}
+
+	payload := map[string]string{
+		"type":      typ,
+		"recipient": recipient,
+		"message":   message,
+	}
+	body, _ := json.Marshal(payload)
+
+	return ch.Publish("", "notifications", false, false, amqp.Publishing{
+		ContentType: "application/json",
+		Body:        body,
+	})
 }
 
 func publishEventToQueue(queueName string, payload any) error {
@@ -423,9 +456,9 @@ func main() {
 		o.Status = "новый"
 		query := `
 			INSERT INTO orders
-				(id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency)
+				(id, sender_name, recipient_name, address_from, address_to, status, created_at, weight, length, width, height, urgency, email)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		`
 		_, err := db.Exec(query,
 			o.ID,
@@ -440,7 +473,9 @@ func main() {
 			o.Width,
 			o.Height,
 			o.Urgency,
+			o.Email,
 		)
+		_ = publishNotification("order_created", o.Email, fmt.Sprintf("Ваш заказ %s успешно создан.", o.ID))
 
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -516,10 +551,11 @@ func main() {
 
 		var createdAt time.Time
 		var completedAt sql.NullTime
+		var email string
 
-		err = db.QueryRow(`SELECT created_at, completed_at FROM orders WHERE id = $1`, orderID).Scan(&createdAt, &completedAt)
+		err = db.QueryRow(`SELECT created_at, completed_at, email FROM orders WHERE id = $1`, orderID).Scan(&createdAt, &completedAt, &email)
 		if err != nil {
-			log.Printf("Ошибка получения дат заказа %s: %v", orderID, err)
+			log.Printf("Ошибка получения инфы %s: %v", orderID, err)
 			// можно не прерывать — просто не публиковать
 			return
 		}
@@ -534,7 +570,7 @@ func main() {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отправки уведомления: " + err.Error()})
 			return
 		}
-
+		_ = publishNotification("order_completed", email, fmt.Sprintf("Ваш заказ %s доставлен. Спасибо!", orderID))
 		c.JSON(http.StatusOK, gin.H{"status": "Заказ завершён и уведомление отправлено"})
 	})
 
