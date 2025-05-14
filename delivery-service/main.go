@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/streadway/amqp"
 )
 
 // DeliveryRequest содержит входные параметры для расчёта стоимости доставки.
@@ -21,6 +24,8 @@ type DeliveryRequest struct {
 	Width    float64 `json:"width"`     // Ширина посылки (метры)
 	Height   float64 `json:"height"`    // Высота посылки (метры)
 	Urgency  int     `json:"urgency"`   // 1 — стандарт, 2 — экспресс
+	OrderID   string  `json:"order_id"`   // 🆕 ID заказа
+	CourierID string  `json:"courier_id"` // 🆕 ID курьера
 }
 
 // DeliveryResponse содержит рассчитанную стоимость доставки.
@@ -106,6 +111,39 @@ func calculateDeliveryCost(req DeliveryRequest) float64 {
 	return cost
 }
 
+func publishDeliveryCalculatedEvent(orderID, courierID string, cost float64) error {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return err
+	}
+	defer ch.Close()
+
+	_, err = ch.QueueDeclare("delivery_calculated", true, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+
+	event := map[string]interface{}{
+		"event":      "delivery_calculated",
+		"order_id":   orderID,
+		"courier_id": courierID,
+		"cost":       cost,
+	}
+	body, _ := json.Marshal(event)
+
+	return ch.Publish("", "delivery_calculated", false, false, amqp.Publishing{
+		ContentType: "application/json",
+		Body:        body,
+	})
+}
+
 func main() {
 	// Инициализируем конфигурацию
 	initConfig()
@@ -130,6 +168,11 @@ func main() {
 			Currency:      currency,
 		}
 		c.JSON(http.StatusOK, resp)
+		if req.OrderID != "" {
+			if err := publishDeliveryCalculatedEvent(req.OrderID, req.CourierID, cost); err != nil {
+				log.Printf("Ошибка публикации delivery_calculated: %v", err)
+			}
+		}
 	})
 
 	r.Run(":8080")

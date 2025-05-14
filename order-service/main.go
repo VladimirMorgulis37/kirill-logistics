@@ -296,7 +296,7 @@ func assignCourierHandler(c *gin.Context) {
 }
 
 // publishOrderCompletedEvent публикует событие завершённого заказа в RabbitMQ.
-func publishOrderCompletedEvent(orderID string) error {
+func publishOrderCompletedEvent(orderID string, courierID string) error {
 	rabbitURL := os.Getenv("RABBITMQ_URL") // Например: "amqp://user:password@rabbitmq:5672/"
 	conn, err := amqp.Dial(rabbitURL)
 	if err != nil {
@@ -325,6 +325,7 @@ func publishOrderCompletedEvent(orderID string) error {
 	// Формируем сообщение с событием завершения заказа.
 	event := map[string]string{
 		"order_id": orderID,
+		"courier_id": courierID,
 		"event":    "order_completed",
 		"status":   "завершён",
 		"message":  "Заказ успешно завершён и доставлен",
@@ -475,7 +476,7 @@ func main() {
 			}
 		}
 		// Публикуем событие в RabbitMQ, чтобы уведомить Notification Service.
-		if err := publishOrderCompletedEvent(orderID); err != nil {
+		if err := publishOrderCompletedEvent(orderID, courierID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отправки уведомления: " + err.Error()})
 			return
 		}

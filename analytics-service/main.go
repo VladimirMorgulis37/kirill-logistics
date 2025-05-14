@@ -16,6 +16,14 @@ import (
 
 var db *sql.DB
 
+type CourierStat struct {
+	CourierID             string  `json:"courier_id"`
+	CourierName           string  `json:"courier_name"`
+	CompletedOrders       int     `json:"completed_orders"`
+	TotalRevenue          float64 `json:"total_revenue"`
+	AverageDeliveryTimeSec float64 `json:"average_delivery_time_sec"`
+}
+
 // initDB устанавливает соединение с базой данных аналитики.
 func initDB() (*sql.DB, error) {
 	host := os.Getenv("DB_HOST")
@@ -96,6 +104,35 @@ func startOrderCompletedConsumer() {
 	}()
 }
 
+func startDeliveryCalculatedConsumer() {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к RabbitMQ: %v", err)
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("Ошибка канала: %v", err)
+	}
+
+	_, err = ch.QueueDeclare("delivery_calculated", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("Ошибка объявления очереди delivery_calculated: %v", err)
+	}
+
+	msgs, err := ch.Consume("delivery_calculated", "", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("Ошибка consume delivery_calculated: %v", err)
+	}
+
+	go func() {
+		for msg := range msgs {
+			log.Printf("Получено событие доставки: %s", msg.Body)
+			HandleDeliveryCalculated(msg.Body)
+		}
+	}()
+}
+
 func handleOrderCreated(body []byte) {
 	var evt map[string]string
 	if err := json.Unmarshal(body, &evt); err != nil {
@@ -136,7 +173,11 @@ func handleOrderCompleted(body []byte) {
 			return
 		}
 		defer tx.Rollback()
-
+		courierID := evt["courier_id"]
+		if courierID == "" {
+			log.Println("Нет courier_id в событии завершения заказа")
+			return
+		}
 		_, err = tx.Exec(`UPDATE general_stats SET completed_orders = completed_orders + 1`)
 		if err != nil {
 			log.Printf("Ошибка обновления completed_orders: %v", err)
@@ -149,12 +190,76 @@ func handleOrderCompleted(body []byte) {
 			return
 		}
 
+		_, err = tx.Exec(`UPDATE courier_stats SET completed_orders = completed_orders + 1 WHERE courier_id = $1`, courierID)
+		if err != nil {
+			log.Printf("Ошибка уменьшения completed_orders (courier): %v", err)
+			return
+		}
+
 		if err := tx.Commit(); err != nil {
 			log.Printf("Ошибка коммита: %v", err)
 		} else {
 			log.Println("Аналитика обновлена: заказ завершён")
 		}
 	}
+}
+
+func HandleDeliveryCalculated(body []byte) {
+	var evt map[string]interface{}
+	if err := json.Unmarshal(body, &evt); err != nil {
+		log.Printf("Некорректный JSON в delivery_calculated: %v", err)
+		return
+	}
+
+	if evt["event"] != "delivery_calculated" {
+		return
+	}
+
+	courierID, ok1 := evt["courier_id"].(string)
+	cost, ok2 := evt["cost"].(float64)
+
+	if !ok1 || !ok2 || courierID == "" {
+		log.Printf("Пропущены поля в delivery_calculated: courier_id или cost")
+		return
+	}
+
+	_, err := db.Exec(`
+		INSERT INTO courier_stats (courier_id, total_revenue, completed_orders, average_delivery_time_sec)
+		VALUES ($1, $2, 0, 0)
+		ON CONFLICT (courier_id) DO UPDATE
+		SET total_revenue = courier_stats.total_revenue + $2
+	`, courierID, cost)
+
+	if err != nil {
+		log.Printf("Ошибка обновления revenue в courier_stats: %v", err)
+		return
+	}
+
+	log.Printf("Обновлена выручка курьера %s: +%.2f", courierID, cost)
+}
+
+func getCourierStats(c *gin.Context) {
+	rows, err := db.Query(`
+		SELECT courier_id, COALESCE(courier_name, ''), completed_orders, total_revenue, average_delivery_time_sec
+		FROM courier_stats
+		ORDER BY total_revenue DESC
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var list []CourierStat
+	for rows.Next() {
+		var stat CourierStat
+		if err := rows.Scan(&stat.CourierID, &stat.CourierName, &stat.CompletedOrders, &stat.TotalRevenue, &stat.AverageDeliveryTimeSec); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		list = append(list, stat)
+	}
+	c.JSON(http.StatusOK, list)
 }
 
 func main() {
@@ -165,6 +270,7 @@ func main() {
 	}
 	go startRabbitConsumer()
 	go startOrderCompletedConsumer()
+	go startDeliveryCalculatedConsumer()
 
 	r := gin.Default()
 
@@ -175,6 +281,7 @@ func main() {
 
 	// Общая статистика заказов с фильтром по периоду
 	r.GET("/analytics/general", getGeneralStats)
+	r.GET("/analytics/couriers", getCourierStats)
 
 	if err := r.Run(":8081"); err != nil {
 		log.Fatalf("Ошибка запуска сервера: %v", err)
