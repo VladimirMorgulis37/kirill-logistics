@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
 	"github.com/streadway/amqp"
@@ -361,7 +362,17 @@ func main() {
 	go startOrderCompletedConsumer()
 	go startDeliveryCalculatedConsumer()
 
+
 	r := gin.Default()
+	corsConfig := cors.Config{
+        AllowOrigins:     []string{"http://localhost:3000"},
+        AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+        AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+        ExposeHeaders:    []string{"Content-Length"},
+        AllowCredentials: true,
+        MaxAge:           12 * time.Hour,
+    }
+    r.Use(cors.New(corsConfig))
 
 	// Health-check
 	r.GET("/health", func(c *gin.Context) {
@@ -372,7 +383,7 @@ func main() {
 	r.GET("/analytics/general", getGeneralStats)
 	r.GET("/analytics/couriers", getCourierStats)
 
-	if err := r.Run(":8081"); err != nil {
+	if err := r.Run(":8080	"); err != nil {
 		log.Fatalf("Ошибка запуска сервера: %v", err)
 	}
 }

@@ -12,37 +12,38 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/jung-kurt/gofpdf"
 	_ "github.com/lib/pq"
 	"github.com/streadway/amqp"
 )
 
 type Courier struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Phone        string  `json:"phone"`
-	VehicleType  string  `json:"vehicle_type"`  // "foot", "bike", "car"
-	Status       string  `json:"status"`        // "available", "busy", "offline"
-	Latitude     float64 `json:"latitude"`
-	Longitude    float64 `json:"longitude"`
-	ActiveOrder  string  `json:"active_order_id"` // может быть "" если не назначен
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Phone       string  `json:"phone"`
+	VehicleType string  `json:"vehicle_type"` // "foot", "bike", "car"
+	Status      string  `json:"status"`       // "available", "busy", "offline"
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
+	ActiveOrder string  `json:"active_order_id"` // может быть "" если не назначен
 }
 
 // Order описывает заказ с расширенными полями для физический характеристик.
 type Order struct {
-	ID            string    `json:"id"`
-	SenderName    string    `json:"sender_name"`
-	RecipientName string    `json:"recipient_name"`
-	AddressFrom   string    `json:"address_from"`
-	AddressTo     string    `json:"address_to"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            string       `json:"id"`
+	SenderName    string       `json:"sender_name"`
+	RecipientName string       `json:"recipient_name"`
+	AddressFrom   string       `json:"address_from"`
+	AddressTo     string       `json:"address_to"`
+	Status        string       `json:"status"`
+	CreatedAt     time.Time    `json:"created_at"`
 	CompletedAt   sql.NullTime `json:"completed_at"`
 	// Новые поля для расчёта доставки
-	Weight  float64 `json:"weight"`   // вес посылки (кг)
-	Length  float64 `json:"length"`   // длина (метры)
-	Width   float64 `json:"width"`    // ширина (метры)
-	Height  float64 `json:"height"`   // высота (метры)
-	Urgency int     `json:"urgency"`  // 1 - стандартная, 2 - экспресс
+	Weight  float64 `json:"weight"`  // вес посылки (кг)
+	Length  float64 `json:"length"`  // длина (метры)
+	Width   float64 `json:"width"`   // ширина (метры)
+	Height  float64 `json:"height"`  // высота (метры)
+	Urgency int     `json:"urgency"` // 1 - стандартная, 2 - экспресс
 
 	CourierID string `json:"courier_id"`
 }
@@ -178,33 +179,33 @@ func publishOrderCreatedEvent(orderID string) error {
 
 // Получение списка курьеров
 func getCouriersHandler(c *gin.Context) {
-    rows, err := db.Query("SELECT id, name FROM couriers")
-    if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-        return
-    }
-    defer rows.Close()
+	rows, err := db.Query("SELECT id, name FROM couriers")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
 
-    var list []Courier
-    for rows.Next() {
-        var cur Courier
-        if err := rows.Scan(&cur.ID, &cur.Name); err != nil {
-            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-            return
-        }
-        list = append(list, cur)
-    }
-    c.JSON(http.StatusOK, list)
+	var list []Courier
+	for rows.Next() {
+		var cur Courier
+		if err := rows.Scan(&cur.ID, &cur.Name); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		list = append(list, cur)
+	}
+	c.JSON(http.StatusOK, list)
 }
 
 // Создание нового курьера
 func createCourierHandler(c *gin.Context) {
-    var cur Courier
-    if err := c.BindJSON(&cur); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
-        return
-    }
-    cur.ID = time.Now().Format("20060102150405")
+	var cur Courier
+	if err := c.BindJSON(&cur); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Некорректные данные"})
+		return
+	}
+	cur.ID = time.Now().Format("20060102150405")
 	_, err := db.Exec(`
 		INSERT INTO couriers (id, name, phone, vehicle_type, status, latitude, longitude, active_order_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -217,118 +218,118 @@ func createCourierHandler(c *gin.Context) {
 	if err := publishCourierCreatedEvent(cur.ID, cur.Name); err != nil {
 		log.Printf("Ошибка отправки события courier_created: %v", err)
 	}
-    // 2) Отправляем POST в tracking-service на localhost
+	// 2) Отправляем POST в tracking-service на localhost
 	endpoint := "http://tracking-service:8080/couriers/tracking"
-    rec := map[string]interface{}{
-        "courier_id": cur.ID,
-        "latitude":   cur.Latitude,
-        "longitude":  cur.Longitude,
-    }
-    payload, _ := json.Marshal(rec)
-    resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
-    if err != nil {
-        log.Printf("createCourierHandler: POST to %s failed: %v", endpoint, err)
-    } else {
-        log.Printf("createCourierHandler: %s -> %s", endpoint, resp.Status)
-        resp.Body.Close()
-    }
+	rec := map[string]interface{}{
+		"courier_id": cur.ID,
+		"latitude":   cur.Latitude,
+		"longitude":  cur.Longitude,
+	}
+	payload, _ := json.Marshal(rec)
+	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("createCourierHandler: POST to %s failed: %v", endpoint, err)
+	} else {
+		log.Printf("createCourierHandler: %s -> %s", endpoint, resp.Status)
+		resp.Body.Close()
+	}
 
-    c.JSON(http.StatusCreated, cur)
+	c.JSON(http.StatusCreated, cur)
 }
 
 func assignCourierHandler(c *gin.Context) {
-    orderID := c.Param("id")
+	orderID := c.Param("id")
 
-    // 1. Парсим входной JSON
-    var body struct {
-        CourierID string `json:"courier_id"`
-    }
-    if err := c.BindJSON(&body); err != nil {
-        log.Printf("assignCourierHandler: bind JSON error: %v", err)
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
-    }
+	// 1. Парсим входной JSON
+	var body struct {
+		CourierID string `json:"courier_id"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		log.Printf("assignCourierHandler: bind JSON error: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
-    // 2. Начинаем транзакцию (чтобы обновления orders и couriers были атомарными)
-    tx, err := db.Begin()
-    if err != nil {
-        log.Printf("assignCourierHandler: begin tx error: %v", err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка начала транзакции"})
-        return
-    }
-    defer tx.Rollback()
+	// 2. Начинаем транзакцию (чтобы обновления orders и couriers были атомарными)
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("assignCourierHandler: begin tx error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка начала транзакции"})
+		return
+	}
+	defer tx.Rollback()
 
-    // 3. Обновляем orders и couriers в зависимости от body.CourierID
-    var res sql.Result
-    if body.CourierID == "" {
-        // отвязываем курьера
-        res, err = tx.Exec("UPDATE orders SET courier_id = NULL WHERE id = $1", orderID)
-        if err == nil {
-            // убираем active_order_id у всех курьеров, у которых он был
-            _, err = tx.Exec("UPDATE couriers SET active_order_id = NULL WHERE active_order_id = $1", orderID)
-        }
-    } else {
-        // привязываем курьера
-        res, err = tx.Exec("UPDATE orders SET courier_id = $1 WHERE id = $2", body.CourierID, orderID)
-        if err == nil {
-            _, err = tx.Exec("UPDATE couriers SET active_order_id = $1 WHERE id = $2", orderID, body.CourierID)
-        }
-    }
-    if err != nil {
-        log.Printf("assignCourierHandler: DB update error: %v", err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления заказа или курьера"})
-        return
-    }
+	// 3. Обновляем orders и couriers в зависимости от body.CourierID
+	var res sql.Result
+	if body.CourierID == "" {
+		// отвязываем курьера
+		res, err = tx.Exec("UPDATE orders SET courier_id = NULL WHERE id = $1", orderID)
+		if err == nil {
+			// убираем active_order_id у всех курьеров, у которых он был
+			_, err = tx.Exec("UPDATE couriers SET active_order_id = NULL WHERE active_order_id = $1", orderID)
+		}
+	} else {
+		// привязываем курьера
+		res, err = tx.Exec("UPDATE orders SET courier_id = $1 WHERE id = $2", body.CourierID, orderID)
+		if err == nil {
+			_, err = tx.Exec("UPDATE couriers SET active_order_id = $1 WHERE id = $2", orderID, body.CourierID)
+		}
+	}
+	if err != nil {
+		log.Printf("assignCourierHandler: DB update error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка обновления заказа или курьера"})
+		return
+	}
 
-    // 4. Проверяем, был ли обновлён хоть один заказ
-    rowsAffected, err := res.RowsAffected()
-    if err != nil {
-        log.Printf("assignCourierHandler: RowsAffected error: %v", err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки обновления заказа"})
-        return
-    }
-    if rowsAffected == 0 {
-        c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
-        return
-    }
+	// 4. Проверяем, был ли обновлён хоть один заказ
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		log.Printf("assignCourierHandler: RowsAffected error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка проверки обновления заказа"})
+		return
+	}
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
+		return
+	}
 
-    // 5. Коммитим транзакцию
-    if err := tx.Commit(); err != nil {
-        log.Printf("assignCourierHandler: commit tx error: %v", err)
-        c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения изменений"})
-        return
-    }
+	// 5. Коммитим транзакцию
+	if err := tx.Commit(); err != nil {
+		log.Printf("assignCourierHandler: commit tx error: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка сохранения изменений"})
+		return
+	}
 	var lat, lon float64
 	err = db.QueryRow(`SELECT latitude, longitude FROM couriers WHERE id = $1`, body.CourierID).Scan(&lat, &lon)
 	if err != nil {
 		log.Printf("assignCourierHandler: не удалось получить координаты курьера %s: %v", body.CourierID, err)
 		lat, lon = 0, 0 // fallback
 	}
-    // 6. Вызываем tracking-service (если задан TRACKING_URL)
-    if trackingURL := os.Getenv("TRACKING_URL"); trackingURL != "" && body.CourierID != "" {
-        rec := map[string]interface{}{
-            "order_id":   orderID,
-            "courier_id": body.CourierID,
+	// 6. Вызываем tracking-service (если задан TRACKING_URL)
+	if trackingURL := os.Getenv("TRACKING_URL"); trackingURL != "" && body.CourierID != "" {
+		rec := map[string]interface{}{
+			"order_id":   orderID,
+			"courier_id": body.CourierID,
 			"latitude":   lat,
-    		"longitude":  lon,
-        }
-        payload, _ := json.Marshal(rec)
-        endpoint := fmt.Sprintf("%s/couriers/tracking", trackingURL)
-        log.Printf("assignCourierHandler: POST %s payload=%s", endpoint, payload)
-        resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
-        if err != nil {
-            log.Printf("assignCourierHandler: POST to tracking failed: %v", err)
-            // не возвращаем ошибку пользователю, т.к. основной кейс уже выполнен
-        } else {
-            resp.Body.Close()
-        }
-    }
+			"longitude":  lon,
+		}
+		payload, _ := json.Marshal(rec)
+		endpoint := fmt.Sprintf("%s/couriers/tracking", trackingURL)
+		log.Printf("assignCourierHandler: POST %s payload=%s", endpoint, payload)
+		resp, err := http.Post(endpoint, "application/json", bytes.NewReader(payload))
+		if err != nil {
+			log.Printf("assignCourierHandler: POST to tracking failed: %v", err)
+			// не возвращаем ошибку пользователю, т.к. основной кейс уже выполнен
+		} else {
+			resp.Body.Close()
+		}
+	}
 
-    // 7. Отправляем единый JSON-ответ
-    c.JSON(http.StatusOK, gin.H{
-        "status":     "Курьер обновлён",
-        "courier_id": body.CourierID,
-    })
+	// 7. Отправляем единый JSON-ответ
+	c.JSON(http.StatusOK, gin.H{
+		"status":     "Курьер обновлён",
+		"courier_id": body.CourierID,
+	})
 }
 
 // publishOrderCompletedEvent публикует событие завершённого заказа в RabbitMQ.
@@ -360,13 +361,13 @@ func publishOrderCompletedEvent(orderID string, courierID string, createdAt, com
 
 	// Формируем сообщение с событием завершения заказа.
 	event := map[string]string{
-		"order_id": orderID,
-		"courier_id": courierID,
+		"order_id":     orderID,
+		"courier_id":   courierID,
 		"created_at":   createdAt.Format(time.RFC3339),
 		"completed_at": completedAt.Format(time.RFC3339),
-		"event":    "order_completed",
-		"status":   "завершён",
-		"message":  "Заказ успешно завершён и доставлен",
+		"event":        "order_completed",
+		"status":       "завершён",
+		"message":      "Заказ успешно завершён и доставлен",
 	}
 	body, err := json.Marshal(event)
 	if err != nil {
@@ -397,14 +398,14 @@ func main() {
 
 	r := gin.Default()
 	corsConfig := cors.Config{
-        AllowOrigins:     []string{"http://localhost:3000"},
-        AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-        AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-        ExposeHeaders:    []string{"Content-Length"},
-        AllowCredentials: true,
-        MaxAge:           12 * time.Hour,
-    }
-    r.Use(cors.New(corsConfig))
+		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}
+	r.Use(cors.New(corsConfig))
 	// Health-check endpoint.
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -442,9 +443,9 @@ func main() {
 		)
 
 		if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 		// 🔔 Публикация события order_created
 		if err := publishOrderCreatedEvent(o.ID); err != nil {
 			log.Printf("Ошибка публикации события order_created: %v", err)
@@ -475,7 +476,7 @@ func main() {
 		id := c.Param("id")
 		var o Order
 		query := "SELECT id, sender_name, recipient_name, address_from, address_to, status, created_at, completed_at, weight, length, width, height, urgency, COALESCE(courier_id, '') FROM orders WHERE id = $1"
-		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt,&o.CompletedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID)
+		err := db.QueryRow(query, id).Scan(&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status, &o.CreatedAt, &o.CompletedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
@@ -537,6 +538,85 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "Заказ завершён и уведомление отправлено"})
 	})
 
+	r.GET("/orders/:id/report", func(c *gin.Context) {
+		orderID := c.Param("id")
+
+		var o Order
+		err := db.QueryRow(`
+			SELECT id, sender_name, recipient_name, address_from, address_to, status,
+				created_at, completed_at, weight, length, width, height, urgency, courier_id
+			FROM orders WHERE id = $1
+		`, orderID).Scan(
+			&o.ID, &o.SenderName, &o.RecipientName, &o.AddressFrom, &o.AddressTo, &o.Status,
+			&o.CreatedAt, &o.CompletedAt, &o.Weight, &o.Length, &o.Width, &o.Height, &o.Urgency, &o.CourierID,
+		)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Заказ не найден"})
+			return
+		}
+
+		// Получим имя курьера (если назначен)
+		var courierName string
+		if o.CourierID != "" {
+			_ = db.QueryRow(`SELECT name FROM couriers WHERE id = $1`, o.CourierID).Scan(&courierName)
+		}
+
+		// Инициализация PDF
+		pdf := gofpdf.New("P", "mm", "A4", "")
+		pdf.SetMargins(15, 20, 15)
+		pdf.AddPage()
+		pdf.AddUTF8Font("DejaVu", "", "assets/fonts/DejaVuSerif.ttf")
+		pdf.SetFont("DejaVu", "", 16)
+		pdf.Cell(0, 10, "Отчёт по заказу")
+		pdf.Ln(12)
+
+		// Основной шрифт
+		pdf.SetFont("DejaVu", "", 12)
+
+		addField := func(label, value string) {
+			pdf.SetFont("DejaVu", "", 12)
+			pdf.Cell(40, 8, label)
+			pdf.SetFont("DejaVu", "", 12)
+			pdf.MultiCell(0, 8, value, "", "", false)
+			pdf.Ln(2)
+		}
+
+		addField("Номер заказа:", o.ID)
+		addField("Отправитель:", o.SenderName)
+		addField("Получатель:", o.RecipientName)
+		addField("Откуда:", o.AddressFrom)
+		addField("Куда:", o.AddressTo)
+		addField("Вес:", fmt.Sprintf("%.2f кг", o.Weight))
+		addField("Габариты:", fmt.Sprintf("%.2fm × %.2fm × %.2fm", o.Length, o.Width, o.Height))
+		addField("Срочность:", map[int]string{1: "Стандарт", 2: "Экспресс"}[o.Urgency])
+		addField("Статус:", o.Status)
+		addField("Создан:", o.CreatedAt.Format("2006-01-02 15:04"))
+
+		if o.CompletedAt.Valid {
+			addField("Завершён:", o.CompletedAt.Time.Format("2006-01-02 15:04"))
+		}
+
+		if courierName != "" {
+			addField("Курьер:", courierName)
+		}
+
+		// Проверка на внутренние ошибки gofpdf
+		if pdf.Err() {
+		log.Printf("Внутренняя ошибка генерации PDF: %v", pdf.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка PDF"})
+			return
+		}
+
+		// Отдаём PDF
+		c.Header("Content-Type", "application/pdf")
+		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=order_%s.pdf", o.ID))
+		err = pdf.Output(c.Writer)
+		if err != nil {
+			log.Printf("Ошибка вывода PDF: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка вывода PDF"})
+		}
+	})
+
 	// (Дополнительно можно добавить GET /orders/:id и другие CRUD-эндпоинты)
 	// Endpoint для удаления заказа
 	r.DELETE("/orders/:id", func(c *gin.Context) {
@@ -559,12 +639,12 @@ func main() {
 		c.Status(http.StatusNoContent)
 	})
 
-	    // 2. Эндпоинты для работы с курьерами
-		r.GET("/couriers", getCouriersHandler)
-		r.POST("/couriers", createCourierHandler)
+	// 2. Эндпоинты для работы с курьерами
+	r.GET("/couriers", getCouriersHandler)
+	r.POST("/couriers", createCourierHandler)
 
-		// 3. Привязка курьера к заказу
-		r.PUT("/orders/:id/assign-courier", assignCourierHandler)
+	// 3. Привязка курьера к заказу
+	r.PUT("/orders/:id/assign-courier", assignCourierHandler)
 
 	r.Run(":8080")
 }

@@ -20,6 +20,8 @@ WORKDIR /root/
 
 COPY --from=builder /app/order-service .
 
+COPY --from=builder /app/assets ./assets
+
 EXPOSE 8080
 
 ENTRYPOINT ["./order-service"]

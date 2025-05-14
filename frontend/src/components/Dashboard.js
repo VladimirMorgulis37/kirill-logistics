@@ -5,6 +5,7 @@ import API_URLS from "../config";
 import CourierMap from "./CourierMap";
 import { HashRouter as Router, Routes, Route, NavLink, Navigate } from "react-router-dom";
 import OrdersTable from "./OrdersTable";
+import CourierStatsTable from "./CourierStatsTable";
 
 export default function Dashboard({ token, onLogout }) {
   const [orders, setOrders] = useState([]);
@@ -15,6 +16,7 @@ export default function Dashboard({ token, onLogout }) {
   const [newCourierVehicle, setNewCourierVehicle] = useState("foot");
   const [newCourierLat, setNewCourierLat] = useState(55.7558);
   const [newCourierLng, setNewCourierLng] = useState(37.6176);
+  const [courierStats, setCourierStats] = useState([]);
   const [newOrder, setNewOrder] = useState({
     senderName: "",
     recipientName: "",
@@ -67,6 +69,23 @@ export default function Dashboard({ token, onLogout }) {
         console.error(err);
         setOrders([]);
       });
+  }, [token]);
+
+  useEffect(() => {
+  fetch(`${API_URLS.analytics}/analytics/couriers`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+    .then(res => {
+      if (!res.ok) throw new Error("Не удалось загрузить статистику курьеров");
+      return res.json();
+    })
+    .then(data => {
+      setCourierStats(Array.isArray(data) ? data : []);
+    })
+    .catch(err => {
+      console.error(err);
+      setCourierStats([]);
+    });
   }, [token]);
 
   // Обработчики
@@ -187,6 +206,8 @@ export default function Dashboard({ token, onLogout }) {
         <NavLink to="/add-courier" style={{ marginRight: 8 }}>Добавить курьера</NavLink>
         <NavLink to="/orders" style={{ marginRight: 8 }}>Список заказов</NavLink>
         <NavLink to="/tracking" style={{ marginRight: 8 }}>Отслеживание</NavLink>
+        <NavLink to="/couriers-stats" style={{ marginRight: 8 }}>Аналитика по курьерам</NavLink>
+
         <button onClick={onLogout} style={{ float: "right" }}>Выйти</button>
       </nav>
       <Routes>
@@ -414,6 +435,15 @@ export default function Dashboard({ token, onLogout }) {
               {sel && (
                 <CourierMap orderId={sel} token={token} />
               )}
+            </>
+          }
+        />
+        <Route
+          path="/couriers-stats"
+          element={
+            <>
+              <h3>Аналитика по курьерам</h3>
+              <CourierStatsTable couriers={courierStats} />
             </>
           }
         />

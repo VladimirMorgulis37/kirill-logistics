@@ -94,6 +94,22 @@ export default function OrdersTable({
       )
     },
     {
+      field: "report",
+      headerName: "Отчёт",
+      width: 120,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => (
+        <a
+          href={`http://localhost:8082/orders/${params.row.id}/report`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          PDF отчёт
+        </a>
+      )
+    },
+    {
       field: "actions",
       headerName: "Действия",
       width: 100,
