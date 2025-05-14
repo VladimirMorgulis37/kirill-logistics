@@ -75,6 +75,34 @@ func startRabbitConsumer() {
 	}()
 }
 
+func startCourierCreatedConsumer() {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		log.Fatalf("Ошибка подключения к RabbitMQ: %v", err)
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("Ошибка канала: %v", err)
+	}
+
+	_, err = ch.QueueDeclare("courier_created", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("Ошибка объявления очереди: %v", err)
+	}
+
+	msgs, err := ch.Consume("courier_created", "", true, false, false, false, nil)
+	if err != nil {
+		log.Fatalf("Ошибка подписки: %v", err)
+	}
+
+	go func() {
+		for msg := range msgs {
+			handleCourierCreated(msg.Body)
+		}
+	}()
+}
+
 func startOrderCompletedConsumer() {
 	rabbitURL := os.Getenv("RABBITMQ_URL")
 	conn, err := amqp.Dial(rabbitURL)
@@ -159,6 +187,34 @@ func handleOrderCreated(body []byte) {
 	}
 }
 
+func handleCourierCreated(body []byte) {
+	var evt map[string]string
+	if err := json.Unmarshal(body, &evt); err != nil {
+		log.Printf("Ошибка разбора courier_created: %v", err)
+		return
+	}
+
+	if evt["event"] != "courier_created" {
+		return
+	}
+
+	courierID := evt["courier_id"]
+	courierName := evt["courier_name"]
+
+	_, err := db.Exec(`
+		INSERT INTO courier_stats (courier_id, courier_name, completed_orders, total_revenue, average_delivery_time_sec)
+		VALUES ($1, $2, 0, 0, 0)
+		ON CONFLICT (courier_id) DO NOTHING
+	`, courierID, courierName)
+
+	if err != nil {
+		log.Printf("Ошибка вставки courier_stats: %v", err)
+	} else {
+		log.Printf("Добавлен курьер в статистику: %s (%s)", courierName, courierID)
+	}
+}
+
+
 func handleOrderCompleted(body []byte) {
 	var evt map[string]string
 	if err := json.Unmarshal(body, &evt); err != nil {
@@ -178,6 +234,44 @@ func handleOrderCompleted(body []byte) {
 			log.Println("Нет courier_id в событии завершения заказа")
 			return
 		}
+
+		createdAt, err1 := time.Parse(time.RFC3339, evt["created_at"])
+		completedAt, err2 := time.Parse(time.RFC3339, evt["completed_at"])
+		if err1 != nil || err2 != nil {
+			log.Printf("Ошибка парсинга времени: %v | %v", err1, err2)
+			return
+		}
+		duration := completedAt.Sub(createdAt).Seconds()
+		// Получаем текущие значения
+		var currentCount int
+		var currentAvg float64
+		err = db.QueryRow(`
+			SELECT completed_orders, average_delivery_time_sec
+			FROM courier_stats WHERE courier_id = $1
+		`, courierID).Scan(&currentCount, &currentAvg)
+
+		if err != nil && err != sql.ErrNoRows {
+			log.Printf("Ошибка получения текущих данных courier_stats: %v", err)
+			return
+		}
+
+		newCount := currentCount + 1
+		newAvg := ((currentAvg * float64(currentCount)) + duration) / float64(newCount)
+
+		// Вставка или обновление
+		_, err = db.Exec(`
+			INSERT INTO courier_stats (courier_id, completed_orders, average_delivery_time_sec, total_revenue)
+			VALUES ($1, $2, $3, 0)
+			ON CONFLICT (courier_id) DO UPDATE
+			SET completed_orders = $2,
+				average_delivery_time_sec = $3
+		`, courierID, newCount, newAvg)
+
+		if err != nil {
+			log.Printf("Ошибка обновления courier_stats: %v", err)
+		} else {
+			log.Printf("Обновлена статистика курьера %s: заказов %d, среднее время %.2f сек", courierID, newCount, newAvg)
+		}
 		_, err = tx.Exec(`UPDATE general_stats SET completed_orders = completed_orders + 1`)
 		if err != nil {
 			log.Printf("Ошибка обновления completed_orders: %v", err)
@@ -187,12 +281,6 @@ func handleOrderCompleted(body []byte) {
 		_, err = tx.Exec(`UPDATE general_stats SET active_orders = active_orders - 1 WHERE active_orders > 0`)
 		if err != nil {
 			log.Printf("Ошибка уменьшения active_orders: %v", err)
-			return
-		}
-
-		_, err = tx.Exec(`UPDATE courier_stats SET completed_orders = completed_orders + 1 WHERE courier_id = $1`, courierID)
-		if err != nil {
-			log.Printf("Ошибка уменьшения completed_orders (courier): %v", err)
 			return
 		}
 
@@ -269,6 +357,7 @@ func main() {
 		log.Fatalf("Ошибка подключения к БД: %v", err)
 	}
 	go startRabbitConsumer()
+	go startCourierCreatedConsumer()
 	go startOrderCompletedConsumer()
 	go startDeliveryCalculatedConsumer()
 

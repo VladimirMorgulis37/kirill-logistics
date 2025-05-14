@@ -103,6 +103,38 @@ func publishEventToQueue(queueName string, payload any) error {
 		})
 }
 
+func publishCourierCreatedEvent(courierID, courierName string) error {
+	rabbitURL := os.Getenv("RABBITMQ_URL")
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("channel: %w", err)
+	}
+	defer ch.Close()
+
+	_, err = ch.QueueDeclare("courier_created", true, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("queue declare: %w", err)
+	}
+
+	event := map[string]string{
+		"event":        "courier_created",
+		"courier_id":   courierID,
+		"courier_name": courierName,
+	}
+	body, _ := json.Marshal(event)
+
+	return ch.Publish("", "courier_created", false, false, amqp.Publishing{
+		ContentType: "application/json",
+		Body:        body,
+	})
+}
+
 // publishOrderCreatedEvent публикует событие создания заказа
 func publishOrderCreatedEvent(orderID string) error {
 	rabbitURL := os.Getenv("RABBITMQ_URL") // пример: "amqp://guest:guest@rabbitmq:5672/"
@@ -180,6 +212,10 @@ func createCourierHandler(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	// 🔔 Публикация события courier_created
+	if err := publishCourierCreatedEvent(cur.ID, cur.Name); err != nil {
+		log.Printf("Ошибка отправки события courier_created: %v", err)
 	}
     // 2) Отправляем POST в tracking-service на localhost
 	endpoint := "http://tracking-service:8080/couriers/tracking"
@@ -296,7 +332,7 @@ func assignCourierHandler(c *gin.Context) {
 }
 
 // publishOrderCompletedEvent публикует событие завершённого заказа в RabbitMQ.
-func publishOrderCompletedEvent(orderID string, courierID string) error {
+func publishOrderCompletedEvent(orderID string, courierID string, createdAt, completedAt time.Time) error {
 	rabbitURL := os.Getenv("RABBITMQ_URL") // Например: "amqp://user:password@rabbitmq:5672/"
 	conn, err := amqp.Dial(rabbitURL)
 	if err != nil {
@@ -326,6 +362,8 @@ func publishOrderCompletedEvent(orderID string, courierID string) error {
 	event := map[string]string{
 		"order_id": orderID,
 		"courier_id": courierID,
+		"created_at":   createdAt.Format(time.RFC3339),
+		"completed_at": completedAt.Format(time.RFC3339),
 		"event":    "order_completed",
 		"status":   "завершён",
 		"message":  "Заказ успешно завершён и доставлен",
@@ -452,7 +490,6 @@ func main() {
 	// Endpoint для завершения заказа: Курьер нажимает "Завершить заказ".
 	r.PUT("/orders/:id/finish", func(c *gin.Context) {
 		orderID := c.Param("id")
-
 		// Обновляем статус заказа на "завершённый".
 		query := "UPDATE orders SET status = $1, completed_at = NOW() WHERE id = $2"
 		_, err := db.Exec(query, "завершён", orderID)
@@ -475,8 +512,24 @@ func main() {
 				return
 			}
 		}
+
+		var createdAt time.Time
+		var completedAt sql.NullTime
+
+		err = db.QueryRow(`SELECT created_at, completed_at FROM orders WHERE id = $1`, orderID).Scan(&createdAt, &completedAt)
+		if err != nil {
+			log.Printf("Ошибка получения дат заказа %s: %v", orderID, err)
+			// можно не прерывать — просто не публиковать
+			return
+		}
+
+		// Проверка на completedAt
+		if !completedAt.Valid {
+			log.Printf("completed_at пустой для заказа %s", orderID)
+			return
+		}
 		// Публикуем событие в RabbitMQ, чтобы уведомить Notification Service.
-		if err := publishOrderCompletedEvent(orderID, courierID); err != nil {
+		if err := publishOrderCompletedEvent(orderID, courierID, createdAt, completedAt.Time); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Ошибка отправки уведомления: " + err.Error()})
 			return
 		}

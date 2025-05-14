@@ -46,6 +46,8 @@ type DeliveryRequest struct {
 	Width   float64 `json:"width"`
 	Height  float64 `json:"height"`
 	Urgency int     `json:"urgency"`
+	OrderID   string  `json:"order_id"`   // 🆕 ID заказа
+	CourierID string  `json:"courier_id"` // 🆕 ID курьера
 }
 
 // DeliveryResponse хранит ответ сервиса расчёта стоимости.
@@ -124,7 +126,7 @@ func geocode(address string) (float64, float64, error) {
 
 func main() {
 	// Параметры эмуляции (подставьте ваши)
-	orderID := "20250511100158"
+	orderID := "20250514130551"
 	orderURL := "http://localhost:8082/orders/" + orderID
 	trackingURL := "http://localhost:8083/couriers/tracking"
 	deliveryURL := "http://localhost:8086/calculate"
@@ -164,6 +166,8 @@ func main() {
 		Weight: order.Weight, Length: order.Length,
 		Width: order.Width, Height: order.Height,
 		Urgency: order.Urgency,
+		OrderID:  order.ID,          // 🟢 добавлено
+		CourierID: order.CourierID,  // 🟢 добавлено
 	}
 	b, _ := json.Marshal(dReq)
 	dResp, err := http.Post(deliveryURL, "application/json", bytes.NewReader(b))

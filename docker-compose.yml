@@ -143,6 +143,7 @@ services:
       - VOLUME_RATE=30
       - URGENCY_FACTOR=1.2
       - CURRENCY=RUB
+      - RABBITMQ_URL=amqp://user:password@rabbitmq:5672/
 
   order-service:
     build: ./order-service
