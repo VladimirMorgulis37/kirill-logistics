@@ -91,6 +91,11 @@ export default function CourierMap({ orderId, token }) {
   useEffect(() => {
   console.log("🧾 orderData:", orderData);
 }, [orderData]);
+
+const flag = document.querySelector('.leaflet-attribution-flag');
+if (flag) {
+  flag.remove();
+}
   return (
     <MapContainer center={center} zoom={12} style={{ height: '400px', width: '100%' }}>
       <TileLayer

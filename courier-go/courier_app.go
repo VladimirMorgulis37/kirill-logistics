@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -77,7 +78,11 @@ func moveTowards(lat, lon *float64, targetLat, targetLon float64, steps int, ord
 			Longitude: *lon,
 			UpdatedAt: time.Now().Format(time.RFC3339),
 		}
-		data, _ := json.Marshal(update)
+		data, err := json.Marshal(update)
+		if err != nil {
+			log.Printf("Ошибка маршалинга JSON: %v", err)
+			continue
+		}
 		resp, err := http.Post(trackingURL, "application/json", bytes.NewReader(data))
 		if err != nil {
 			log.Printf("Ошибка трекинга: %v", err)
@@ -85,7 +90,9 @@ func moveTowards(lat, lon *float64, targetLat, targetLon float64, steps int, ord
 			log.Printf("📍 Трекинг %d: lat=%.5f, lon=%.5f", i+1, *lat, *lon)
 			resp.Body.Close()
 		}
-		time.Sleep(2 * time.Second)
+		sleepDuration := time.Duration(1000+rand.Intn(4000)) * time.Millisecond
+		log.Printf("Задержка на %v", sleepDuration)
+		time.Sleep(sleepDuration)
 	}
 }
 

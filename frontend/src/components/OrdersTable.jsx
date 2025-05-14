@@ -27,15 +27,31 @@ export default function OrdersTable({
       field: "created_at",
       headerName: "Создан",
       width: 160,
-      valueFormatter: (params) =>
-        params?.value ? new Date(params.value).toLocaleString() : "-"
+      renderCell: (params) => {
+        const value = params.row.created_at;
+        return (
+          <span>
+            {value
+              ? new Date(value).toLocaleString("ru-RU")
+              : "-"}
+          </span>
+        );
+      }
     },
     {
       field: "completed_at",
       headerName: "Завершён",
       width: 160,
-      valueFormatter: (params) =>
-        params?.value ? new Date(params.value).toLocaleString() : "-"
+      renderCell: (params) => {
+        const nt = params.row.completed_at;
+        return (
+          <span>
+            {nt?.Valid && nt.Time
+              ? new Date(nt.Time).toLocaleString("ru-RU")
+              : "-"}
+          </span>
+        );
+      }
     },
     {
       field: "status",

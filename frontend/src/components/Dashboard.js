@@ -387,26 +387,6 @@ export default function Dashboard({ token, onLogout }) {
           element={
             <>
               <h3>Список заказов</h3>
-              <ul>
-                {orders.map(o => (
-                  <li key={o.id} style={{ marginBottom: 8 }}>
-                    {o.sender_name} → {o.recipient_name} (Статус: {o.status})
-                    <button onClick={() => handleDeleteOrder(o.id)}>Удалить</button>
-                    <div>
-                      Курьер:{' '}
-                      {o.courier_id
-                        ? couriers.find(c => c.id === o.courier_id)?.name
-                        : 'Не назначен'}
-                        <select value={o.courier_id || ''} onChange={e => handleAssignCourier(o.id, e.target.value)}>
-                        <option value="">— выбрать —</option>
-                        {couriers.map(c => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </li>
-                ))}
-              </ul>
               <OrdersTable
                 orders={orders}couriers={couriers}
                 onDeleteOrder={handleDeleteOrder}
