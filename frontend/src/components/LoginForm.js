@@ -1,6 +1,15 @@
 // src/components/LoginForm.js
 import React, { useState } from "react";
 import API_URLS from "../config";
+import {
+  Box,
+  Paper,
+  Typography,
+  TextField,
+  Button,
+  Alert,
+  Container
+} from "@mui/material";
 
 const LoginForm = ({ onLogin }) => {
   const [username, setUsername] = useState("");
@@ -15,11 +24,13 @@ const LoginForm = ({ onLogin }) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
+
       if (!response.ok) {
         const errData = await response.json();
         setError(errData.error || "Ошибка авторизации");
         return;
       }
+
       const data = await response.json();
       onLogin(data.token);
     } catch (err) {
@@ -28,31 +39,40 @@ const LoginForm = ({ onLogin }) => {
   };
 
   return (
-    <div>
-      <h2>Вход в систему</h2>
-      {error && <p style={{ color: "red" }}>{error}</p>}
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label>Логин: </label>
-          <input
-            type="text"
+    <Container maxWidth="sm">
+      <Paper elevation={3} sx={{ p: 4, mt: 8 }}>
+        <Typography variant="h5" gutterBottom>Вход в систему</Typography>
+        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+        <Box component="form" onSubmit={handleSubmit}>
+          <TextField
+            label="Логин"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             required
+            fullWidth
+            margin="normal"
           />
-        </div>
-        <div>
-          <label>Пароль: </label>
-          <input
+          <TextField
+            label="Пароль"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
+            fullWidth
+            margin="normal"
           />
-        </div>
-        <button type="submit">Войти</button>
-      </form>
-    </div>
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            fullWidth
+            sx={{ mt: 2 }}
+          >
+            Войти
+          </Button>
+        </Box>
+      </Paper>
+    </Container>
   );
 };
 

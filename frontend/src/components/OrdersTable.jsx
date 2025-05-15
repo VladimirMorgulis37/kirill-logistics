@@ -127,7 +127,15 @@ export default function OrdersTable({
   ];
 
   return (
-    <Box sx={{ height: 600, width: "100%"}}>
+    <Box
+      sx={{
+        height: 'calc(100vh - 160px)',
+        width: '100%',
+        flexGrow: 1,
+        display: 'flex',
+        flexDirection: 'column'
+      }}
+    >
       <DataGrid
         columnHeaderHeight={100}
         rows={orders}
@@ -136,6 +144,20 @@ export default function OrdersTable({
         pageSize={10}
         rowsPerPageOptions={[10, 25, 50]}
         disableSelectionOnClick
+        sx={{
+          '& .MuiDataGrid-cell': {
+            justifyContent: 'center',
+            textAlign: 'center',
+          },
+          '& .MuiDataGrid-columnHeader': {
+            justifyContent: 'center',
+            textAlign: 'center',
+          },
+          '& .MuiDataGrid-columnHeaderTitle': {
+            width: '100%',
+            textAlign: 'center',
+          }
+        }}
       />
     </Box>
   );
