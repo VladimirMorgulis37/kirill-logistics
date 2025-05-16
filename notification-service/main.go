@@ -34,6 +34,7 @@ type NotificationMessage struct {
 }
 
 var db *sql.DB
+var sendEmailFunc = sendEmail
 
 // initDB устанавливает подключение к базе данных уведомлений.
 func initDB() (*sql.DB, error) {
@@ -148,7 +149,7 @@ func processNotification(msg NotificationMessage) error {
 	if err != nil {
 		return err
 	}
-	err = sendEmail(n.Recipient, "Уведомление от службы доставки", n.Message)
+	err = sendEmailFunc(n.Recipient, "Уведомление от службы доставки", n.Message)
 	if err != nil {
 		log.Printf("Ошибка отправки письма: %v", err)
 		_, _ = db.Exec("UPDATE notifications SET status = $1 WHERE id = $2", "failed", n.ID)

@@ -39,10 +39,17 @@ export default function Dashboard({ token, onLogout }) {
   });
 
   useEffect(() => {
-    fetch(`${API_URLS.orders}/couriers`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(res => res.ok ? res.json() : [])
-      .then(setCouriers)
-      .catch(() => setCouriers([]));
+  fetch(`${API_URLS.orders}/couriers`, { headers: { Authorization: `Bearer ${token}` } })
+    .then(async res => {
+      if (!res.ok) throw new Error("Ошибка загрузки курьеров");
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    })
+    .then(setCouriers)
+    .catch((err) => {
+      console.error(err);
+      setCouriers([]); // гарантированно массив
+    });
 
     fetch(`${API_URLS.orders}/orders`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => res.json())
@@ -120,7 +127,7 @@ export default function Dashboard({ token, onLogout }) {
     })
       .then(res => res.json())
       .then(c => {
-        setCouriers(prev => [...prev, c]);
+      setCouriers(prev => [...(Array.isArray(prev) ? prev : []), c]);
         setNewCourier({ name: "", phone: "", vehicle: "foot", lat: 55.7558, lng: 37.6176 });
       })
       .catch(console.error);
@@ -176,20 +183,16 @@ export default function Dashboard({ token, onLogout }) {
             <Paper sx={{ p: 3 }}>
               <Typography variant="h5" gutterBottom>Добавить заказ</Typography>
               <Box component="form" onSubmit={handleAddOrder}>
-                <Grid container spacing={2}>
-                  {["senderName", "email", "recipientName", "addressFrom", "addressTo", "weight", "length", "width", "height"].map(field => (
-                    <Grid item xs={12} sm={6} key={field}>
-                      <TextField
-                        label={field === "email" ? "Email отправителя" : field.replace(/([A-Z])/g, " $1")}
-                        name={field}
-                        type={field === "email" ? "email" : "text"}
-                        value={newOrder[field]}
-                        onChange={handleInputChange}
-                        required
-                        fullWidth
-                      />
-                    </Grid>
-                  ))}
+               <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}><TextField label="Имя отправителя" name="senderName" value={newOrder.senderName} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Email отправителя" name="email" type="email" value={newOrder.email} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Имя получателя" name="recipientName" value={newOrder.recipientName} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Адрес отправления" name="addressFrom" value={newOrder.addressFrom} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Адрес доставки" name="addressTo" value={newOrder.addressTo} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Вес (кг)" name="weight" type="number" value={newOrder.weight} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Длина (м)" name="length" type="number" value={newOrder.length} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Ширина (м)" name="width" type="number" value={newOrder.width} onChange={handleInputChange} required fullWidth /></Grid>
+                  <Grid item xs={12} sm={6}><TextField label="Высота (м)" name="height" type="number" value={newOrder.height} onChange={handleInputChange} required fullWidth /></Grid>
                   <Grid item xs={12} sm={6}>
                     <FormControl fullWidth>
                       <InputLabel>Срочность</InputLabel>

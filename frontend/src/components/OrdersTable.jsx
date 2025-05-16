@@ -72,26 +72,28 @@ export default function OrdersTable({
       field: "courier_id",
       headerName: "Курьер",
       width: 180,
-      renderCell: (params) => (
-        <Select
-          value={params.value || ""}
-          size="small"
-          onChange={(e) =>
-            onAssignCourier(params.row.id, e.target.value)
-          }
-          displayEmpty
-          sx={{ minWidth: 140 }}
-        >
-          <MenuItem value="">
-            <em>Не назначен</em>
-          </MenuItem>
-          {couriers.map((c) => (
-            <MenuItem key={c.id} value={c.id}>
-              {c.name}
+      renderCell: (params) => {
+        const selected = params.value != null ? String(params.value) : "";
+
+        return (
+          <Select
+            value={selected}
+            size="small"
+            onChange={(e) => onAssignCourier(params.row.id, e.target.value)}
+            displayEmpty
+            sx={{ minWidth: 140 }}
+          >
+            <MenuItem value="">
+              <em>Не назначен</em>
             </MenuItem>
-          ))}
-        </Select>
-      )
+            {(couriers || []).map((c) => (
+              <MenuItem key={c.id} value={String(c.id)}>
+                {c.name}
+              </MenuItem>
+            ))}
+          </Select>
+        );
+      }
     },
     {
       field: "report",

@@ -125,8 +125,8 @@ func geocode(address string) (float64, float64, error) {
 }
 
 func main() {
-	// Параметры эмуляции (подставьте ваши)
-	orderID := "20250514174320"
+	// Параметры эмуляции
+	orderID := "20250515103122"
 	orderURL := "http://localhost:8082/orders/" + orderID
 	trackingURL := "http://localhost:8083/couriers/tracking"
 	deliveryURL := "http://localhost:8086/calculate"
